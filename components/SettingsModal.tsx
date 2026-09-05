@@ -68,7 +68,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       navTitle: siteSettings?.navTitle || 'CloudNav',
       favicon: siteSettings?.favicon || '',
       cardStyle: siteSettings?.cardStyle || 'detailed',
-      passwordExpiryDays: siteSettings?.passwordExpiryDays ?? 7
+      passwordExpiryDays: siteSettings?.passwordExpiryDays ?? 7,
+      requirePasswordOnAccess: siteSettings?.requirePasswordOnAccess ?? true
   }));
   
   const [generatedIcons, setGeneratedIcons] = useState<string[]>([]);
@@ -102,7 +103,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           title: siteSettings?.title || 'CloudNav - 我的导航',
           navTitle: siteSettings?.navTitle || 'CloudNav',
           favicon: siteSettings?.favicon || '',
-          cardStyle: siteSettings?.cardStyle || 'detailed'
+          cardStyle: siteSettings?.cardStyle || 'detailed',
+          passwordExpiryDays: siteSettings?.passwordExpiryDays ?? 7,
+          requirePasswordOnAccess: siteSettings?.requirePasswordOnAccess ?? true
       };
       setLocalSiteSettings(safeSettings);
       if (generatedIcons.length === 0) {
@@ -128,7 +131,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         const next = { ...prev, [key]: value };
         
         // 如果是身份验证过期天数修改，立即保存到 KV 空间
-        if (key === 'passwordExpiryDays' && authToken) {
+        if ((key === 'passwordExpiryDays' || key === 'requirePasswordOnAccess') && authToken) {
             saveWebsiteConfigToKV(next);
         }
         
@@ -1113,6 +1116,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                                             </button>
                                         ))}
                                     </div>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">访问时先验密</label>
+                                        <p className="text-xs text-slate-500 mt-1">打开后，访问网站就先验密码。关闭后，只有点设置这些操作才验密。</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={!!localSiteSettings.requirePasswordOnAccess}
+                                        onClick={() => handleSiteChange('requirePasswordOnAccess', !localSiteSettings.requirePasswordOnAccess)}
+                                        className={`relative w-12 h-7 rounded-full transition-colors shrink-0 ml-4 ${
+                                            localSiteSettings.requirePasswordOnAccess
+                                                ? 'bg-blue-600'
+                                                : 'bg-slate-300 dark:bg-slate-600'
+                                        }`}
+                                    >
+                                        <span className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                                            localSiteSettings.requirePasswordOnAccess ? 'translate-x-5' : ''
+                                        }`} />
+                                    </button>
                                 </div>
                             </div>
                             <div>
