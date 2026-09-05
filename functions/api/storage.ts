@@ -29,9 +29,13 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     // 如果是检查认证请求，返回是否设置了密码
     if (checkAuth === 'true') {
       const serverPassword = env.PASSWORD;
+      // 访问时先验密开关：默认开启（保持原有行为），关闭后无需密码也能浏览网站
+      const websiteConfigStr = await env.CLOUDNAV_KV.get('website_config');
+      const websiteConfig = websiteConfigStr ? JSON.parse(websiteConfigStr) : {};
+      const requireOnAccess = websiteConfig.requirePasswordOnAccess !== false;
       return new Response(JSON.stringify({ 
         hasPassword: !!serverPassword,
-        requiresAuth: !!serverPassword 
+        requiresAuth: !!serverPassword && requireOnAccess
       }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
