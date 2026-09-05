@@ -124,6 +124,7 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [authToken, setAuthToken] = useState<string>('');
   const [requiresAuth, setRequiresAuth] = useState<boolean | null>(null); // null表示未检查，true表示需要认证，false表示不需要
+  const [serverHasPassword, setServerHasPassword] = useState(false); // 服务器是否配置了访问密码
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   
   // Sort State
@@ -527,6 +528,7 @@ function App() {
             if (authRes.ok) {
                 const authData = await authRes.json();
                 setRequiresAuth(authData.requiresAuth);
+                setServerHasPassword(!!authData.hasPassword);
                 
                 // 如果需要认证但用户未登录，则不获取数据
                 if (authData.requiresAuth && !savedToken) {
@@ -2027,7 +2029,11 @@ function App() {
       {/* 主要内容 - 只有在不需要认证或已认证时显示 */}
       {(!requiresAuth || authToken) && (
         <>
-          <AuthModal isOpen={isAuthOpen} onLogin={handleLogin} />
+          <AuthModal
+            isOpen={isAuthOpen}
+            onLogin={handleLogin}
+            onClose={() => setIsAuthOpen(false)}
+          />
       
       <CategoryAuthModal 
         isOpen={!!catAuthModalData}
@@ -2231,9 +2237,9 @@ function App() {
                 </button>
 
                 <button 
-                    onClick={() => setIsSettingsModalOpen(true)}
+                    onClick={() => { if (!authToken && serverHasPassword) setIsAuthOpen(true); else setIsSettingsModalOpen(true); }}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
-                    title="AI 设置"
+                    title="网站设置"
                 >
                     <Settings size={14} />
                     <span>设置</span>
