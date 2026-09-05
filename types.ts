@@ -24,6 +24,7 @@ export interface SiteSettings {
   favicon: string;
   cardStyle: 'detailed' | 'simple';
   passwordExpiryDays: number; // 密码过期天数，0表示永久不退出
+  requirePasswordOnAccess?: boolean; // 访问时先验密：true=打开网站先输密码，false=仅管理操作需验密
 }
 
 export interface AppState {
