@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
   Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
-  Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save, CheckSquare, LogOut, ExternalLink, X
+  Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save, CheckSquare, LogOut, ExternalLink, X, Activity
 } from 'lucide-react';
 import {
   DndContext,
@@ -37,6 +37,7 @@ import SettingsModal from './components/SettingsModal';
 import SearchConfigModal from './components/SearchConfigModal';
 import ContextMenu from './components/ContextMenu';
 import QRCodeModal from './components/QRCodeModal';
+import LinkCheckModal from './components/LinkCheckModal';
 
 // --- 配置项 ---
 // 项目核心仓库地址
@@ -114,6 +115,7 @@ function App() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isSearchConfigModalOpen, setIsSearchConfigModalOpen] = useState(false);
+  const [isLinkCheckModalOpen, setIsLinkCheckModalOpen] = useState(false);
   const [catAuthModalData, setCatAuthModalData] = useState<Category | null>(null);
   
   const [editingLink, setEditingLink] = useState<LinkItem | undefined>(undefined);
@@ -2088,6 +2090,13 @@ function App() {
         onSave={(sources) => handleSaveSearchConfig(sources, searchMode)}
       />
 
+      <LinkCheckModal
+        isOpen={isLinkCheckModalOpen}
+        onClose={() => setIsLinkCheckModalOpen(false)}
+        links={links}
+        categories={categories}
+      />
+
       {/* Sidebar Mobile Overlay */}
       {sidebarOpen && (
         <div 
@@ -2211,7 +2220,7 @@ function App() {
         {/* Footer Actions */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 shrink-0">
             
-            <div className="grid grid-cols-3 gap-2 mb-2">
+            <div className="grid grid-cols-4 gap-2 mb-2">
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsImportModalOpen(true); }}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
@@ -2237,6 +2246,15 @@ function App() {
                 >
                     <Settings size={14} />
                     <span>设置</span>
+                </button>
+
+                <button 
+                    onClick={() => setIsLinkCheckModalOpen(true)}
+                    className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
+                    title="批量检测链接可用性"
+                >
+                    <Activity size={14} />
+                    <span>检测</span>
                 </button>
             </div>
             
