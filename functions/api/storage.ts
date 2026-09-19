@@ -10,6 +10,55 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
 };
 
+/** 读取访问验密开关，默认开启（未配置过时打开网站需要先输密码） */
+const getRequireLoginAccess = async (env: Env): Promise<boolean> => {
+  try {
+    const str = await env.CLOUDNAV_KV.get('website_config');
+    if (str) {
+      const cfg = JSON.parse(str);
+      if (typeof cfg.requireLoginAccess === 'boolean') return cfg.requireLoginAccess;
+    }
+  } catch (e) {}
+  return true;
+};
+
+/** 校验密码并检查是否过期，通过返回 null，失败返回错误 Response */
+const verifyAccess = async (env: Env, request: Request): Promise<Response | null> => {
+  const providedPassword = request.headers.get('x-auth-password');
+  if (!env.PASSWORD || providedPassword !== env.PASSWORD) {
+    return new Response(JSON.stringify({ error: '密码错误' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    });
+  }
+
+  // 检查密码是否过期
+  const websiteConfigStr = await env.CLOUDNAV_KV.get('website_config');
+  const websiteConfig = websiteConfigStr ? JSON.parse(websiteConfigStr) : { passwordExpiryDays: 7 };
+  const passwordExpiryDays = websiteConfig.passwordExpiryDays || 7;
+
+  if (passwordExpiryDays > 0) {
+    const lastAuthTime = await env.CLOUDNAV_KV.get('last_auth_time');
+    if (lastAuthTime) {
+      const lastTime = parseInt(lastAuthTime);
+      const now = Date.now();
+      const expiryMs = passwordExpiryDays * 24 * 60 * 60 * 1000;
+
+      // 如果已过期，返回错误
+      if (now - lastTime > expiryMs) {
+        return new Response(JSON.stringify({ error: '密码已过期，请重新输入' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        });
+      }
+    }
+  }
+
+  // 更新最后认证时间
+  await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
+  return null;
+};
+
 // 处理 OPTIONS 请求（解决跨域预检）
 export const onRequestOptions = async () => {
   return new Response(null, {
@@ -26,12 +75,13 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     const checkAuth = url.searchParams.get('checkAuth');
     const getConfig = url.searchParams.get('getConfig');
     
-    // 如果是检查认证请求，返回是否设置了密码
+    // 如果是检查认证请求，返回是否设置了密码以及访问验密开关
     if (checkAuth === 'true') {
       const serverPassword = env.PASSWORD;
+      const requireLoginAccess = await getRequireLoginAccess(env);
       return new Response(JSON.stringify({ 
         hasPassword: !!serverPassword,
-        requiresAuth: !!serverPassword 
+        requiresAuth: !!serverPassword && requireLoginAccess
       }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
@@ -39,6 +89,11 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     
     // 如果是获取配置请求
     if (getConfig === 'ai') {
+      // AI 配置含 API Key，访问验密开启时强制验密
+      if (await getRequireLoginAccess(env)) {
+        const errRes = await verifyAccess(env, request);
+        if (errRes) return errRes;
+      }
       const aiConfig = await env.CLOUDNAV_KV.get('ai_config');
       return new Response(aiConfig || '{}', {
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
@@ -88,38 +143,11 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     // 从 KV 中读取数据
     const data = await env.CLOUDNAV_KV.get('app_data');
     
-    // 如果是获取数据请求，需要密码验证
-    if (url.searchParams.get('getConfig') === 'true') {
-      const password = request.headers.get('x-auth-password');
-      if (!password || password !== env.PASSWORD) {
-        return new Response(JSON.stringify({ error: '密码错误' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        });
-      }
-      
-      // 检查密码是否过期
-      const websiteConfigStr = await env.CLOUDNAV_KV.get('website_config');
-      const websiteConfig = websiteConfigStr ? JSON.parse(websiteConfigStr) : { passwordExpiryDays: 7 };
-      const passwordExpiryDays = websiteConfig.passwordExpiryDays || 7;
-      
-      // 如果设置了密码过期时间，检查是否过期
-      if (passwordExpiryDays > 0) {
-        const lastAuthTime = await env.CLOUDNAV_KV.get('last_auth_time');
-        if (lastAuthTime) {
-          const lastTime = parseInt(lastAuthTime);
-          const now = Date.now();
-          const expiryMs = passwordExpiryDays * 24 * 60 * 60 * 1000;
-          
-          // 如果已过期，返回错误
-          if (now - lastTime > expiryMs) {
-            return new Response(JSON.stringify({ error: '密码已过期，请重新输入' }), {
-              status: 401,
-              headers: { 'Content-Type': 'application/json', ...corsHeaders },
-            });
-          }
-        }
-      }
+    // 如果是获取数据请求：访问验密开启时强制验密（保护网站数据不公开暴露）
+    const requireLoginAccess = await getRequireLoginAccess(env);
+    if (url.searchParams.get('getConfig') === 'true' || requireLoginAccess) {
+      const errRes = await verifyAccess(env, request);
+      if (errRes) return errRes;
       
       // 更新最后认证时间
       await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
@@ -238,7 +266,12 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     
     // 如果是保存网站配置
     if (body.saveConfig === 'website') {
-      await env.CLOUDNAV_KV.put('website_config', JSON.stringify(body.config));
+      // 合并旧配置：避免前端某个入口漏传字段时把已有设置覆盖丢失
+      const oldStr = await env.CLOUDNAV_KV.get('website_config');
+      let oldConfig: any = {};
+      try { oldConfig = oldStr ? JSON.parse(oldStr) : {}; } catch (e) {}
+      const merged = { ...oldConfig, ...body.config };
+      await env.CLOUDNAV_KV.put('website_config', JSON.stringify(merged));
       return new Response(JSON.stringify({ success: true }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });

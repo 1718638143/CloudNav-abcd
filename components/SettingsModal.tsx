@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu } from 'lucide-react';
+import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck } from 'lucide-react';
 import { AIConfig, LinkItem, Category, SiteSettings } from '../types';
 import { generateLinkDescription } from '../services/geminiService';
 import JSZip from 'jszip';
@@ -14,6 +14,7 @@ interface SettingsModalProps {
   categories: Category[];
   onUpdateLinks: (links: LinkItem[]) => void;
   authToken: string | null;
+  onToggleRequireLogin: (enabled: boolean) => void;
 }
 
 const getRandomColor = () => {
@@ -58,7 +59,7 @@ const generateSvgIcon = (text: string, color1: string, color2: string) => {
 };
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
-    isOpen, onClose, config, siteSettings, onSave, links, categories, onUpdateLinks, authToken 
+    isOpen, onClose, config, siteSettings, onSave, links, categories, onUpdateLinks, authToken, onToggleRequireLogin 
 }) => {
   const [activeTab, setActiveTab] = useState<'site' | 'ai' | 'tools'>('site');
   const [localConfig, setLocalConfig] = useState<AIConfig>(config);
@@ -72,6 +73,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   }));
   
   const [generatedIcons, setGeneratedIcons] = useState<string[]>([]);
+  const [requireLogin, setRequireLogin] = useState<boolean>(siteSettings?.requireLoginAccess ?? true);
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -102,9 +104,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           title: siteSettings?.title || 'CloudNav - 我的导航',
           navTitle: siteSettings?.navTitle || 'CloudNav',
           favicon: siteSettings?.favicon || '',
-          cardStyle: siteSettings?.cardStyle || 'detailed'
+          cardStyle: siteSettings?.cardStyle || 'detailed',
+          passwordExpiryDays: siteSettings?.passwordExpiryDays ?? 7,
+          requireLoginAccess: siteSettings?.requireLoginAccess ?? true
       };
       setLocalSiteSettings(safeSettings);
+      setRequireLogin(siteSettings?.requireLoginAccess ?? true);
       if (generatedIcons.length === 0) {
           updateGeneratedIcons(safeSettings.navTitle);
       }
@@ -160,7 +165,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSave = () => {
-    onSave(localConfig, localSiteSettings);
+    // 保存时带上验密开关，避免覆盖丢失
+    onSave(localConfig, { ...localSiteSettings, requireLoginAccess: requireLogin });
     onClose();
   };
 
@@ -1114,6 +1120,35 @@ document.addEventListener('DOMContentLoaded', async () => {
                                         ))}
                                     </div>
                                 </div>
+                            </div>
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                                        <ShieldCheck size={15} className="text-blue-500" />
+                                        打开网站时先验密
+                                    </label>
+                                    {/* iOS 风格开关 */}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const next = !requireLogin;
+                                            setRequireLogin(next);
+                                            onToggleRequireLogin(next);
+                                        }}
+                                        disabled={!authToken}
+                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${requireLogin ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'} ${!authToken ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                                        title={authToken ? (requireLogin ? '点击关闭：打开网站直接浏览，仅保存/修改时验密' : '点击开启：打开网站需要先输入密码') : '需要先登录才能修改'}
+                                    >
+                                        <span
+                                            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${requireLogin ? 'translate-x-6' : 'translate-x-1'}`}
+                                        />
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-500 mb-3">
+                                    {requireLogin
+                                        ? '已开启：打开网站需要先输入访问密码，保护网站数据不被泄露'
+                                        : '已关闭：打开网站可直接浏览，仅在保存/修改数据等操作时才验证密码'}
+                                </p>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">身份验证过期天数</label>

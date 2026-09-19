@@ -103,7 +103,8 @@ function App() {
           navTitle: 'CloudNav',
           favicon: '',
           cardStyle: 'detailed' as const,
-          passwordExpiryDays: 7
+          passwordExpiryDays: 7,
+          requireLoginAccess: true
       };
   });
   
@@ -600,7 +601,8 @@ function App() {
                         navTitle: websiteConfigData.navTitle || prev.navTitle,
                         favicon: websiteConfigData.favicon || prev.favicon,
                         cardStyle: websiteConfigData.cardStyle || prev.cardStyle,
-                        passwordExpiryDays: websiteConfigData.passwordExpiryDays !== undefined ? websiteConfigData.passwordExpiryDays : prev.passwordExpiryDays
+                        passwordExpiryDays: websiteConfigData.passwordExpiryDays !== undefined ? websiteConfigData.passwordExpiryDays : prev.passwordExpiryDays,
+                        requireLoginAccess: websiteConfigData.requireLoginAccess !== undefined ? websiteConfigData.requireLoginAccess : prev.requireLoginAccess
                     }));
                 }
             }
@@ -842,7 +844,8 @@ function App() {
                             navTitle: websiteConfigData.navTitle || prev.navTitle,
                             favicon: websiteConfigData.favicon || prev.favicon,
                             cardStyle: websiteConfigData.cardStyle || prev.cardStyle,
-                            passwordExpiryDays: websiteConfigData.passwordExpiryDays !== undefined ? websiteConfigData.passwordExpiryDays : prev.passwordExpiryDays
+                            passwordExpiryDays: websiteConfigData.passwordExpiryDays !== undefined ? websiteConfigData.passwordExpiryDays : prev.passwordExpiryDays,
+                            requireLoginAccess: websiteConfigData.requireLoginAccess !== undefined ? websiteConfigData.requireLoginAccess : prev.requireLoginAccess
                         }));
                     }
                 }
@@ -1284,6 +1287,39 @@ function App() {
                   console.error('Error saving website config to KV:', error);
               }
           }
+      }
+  };
+
+  // 切换"打开网站先验密"开关：即时保存到 KV，对所有访问者生效
+  const handleToggleRequireLogin = async (enabled: boolean) => {
+      const newSettings = { ...siteSettings, requireLoginAccess: enabled };
+      setSiteSettings(newSettings);
+      localStorage.setItem('cloudnav_site_settings', JSON.stringify(newSettings));
+      // 同步更新认证门状态：开启后未登录的访问者会看到密码门，已登录用户不受影响；
+      // 关闭则全站直接浏览（保存/修改等操作仍需密码）
+      setRequiresAuth(enabled);
+      
+      if (!authToken) {
+          console.warn('未登录，无法保存访问验密开关到服务器');
+          return;
+      }
+      try {
+          const response = await fetch('/api/storage', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'x-auth-password': authToken
+              },
+              body: JSON.stringify({
+                  saveConfig: 'website',
+                  config: newSettings
+              })
+          });
+          if (!response.ok) {
+              console.error('Failed to save website config to KV:', response.statusText);
+          }
+      } catch (error) {
+          console.error('Error saving website config to KV:', error);
       }
   };
 
@@ -2081,6 +2117,7 @@ function App() {
         categories={categories}
         onUpdateLinks={(newLinks) => updateData(newLinks, categories)}
         authToken={authToken}
+        onToggleRequireLogin={handleToggleRequireLogin}
       />
 
       <SearchConfigModal
