@@ -724,6 +724,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    // HTML 转义：防止恶意链接标题/URL 注入面板（XSS）
+    const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const escAttr = (s) => escHtml(s);
+
     const toggleCat = (id, forceOpen = false) => {
         const header = document.querySelector(\`.cat-header[data-id="\${id}"]\`);
         if (header) {
@@ -806,7 +810,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             <div class="cat-group">
                 <div class="cat-header \${activeClass}" data-id="\${cat.id}">
                     \${getArrowIcon()}
-                    <span>\${cat.name}</span>
+                    <span>\${escHtml(cat.name)}</span>
                     \${isLocked ? getLockIcon() : ''}
                 </div>
                 <div class="cat-links">
@@ -816,10 +820,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             filteredDirectLinks.forEach(link => {
                 const iconSrc = getFaviconUrl(link.url);
                 html += \`
-                    <a href="\${link.url}" target="_blank" class="link-item">
+                    <a href="\${escAttr(link.url)}" target="_blank" class="link-item">
                         <div class="link-icon"><img src="\${iconSrc}" /></div>
                         <div class="link-info">
-                            <div class="link-title">\${link.title}</div>
+                            <div class="link-title">\${escHtml(link.title)}</div>
                         </div>
                     </a>
                 \`;
@@ -831,16 +835,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 html += \`
                     <div class="sub-cat-group">
                         <div class="sub-cat-title" style="display: flex; align-items: center; justify-content: space-between;">
-                            <span>\${sub.name}</span>
+                            <span>\${escHtml(sub.name)}</span>
                             \${isSubLocked ? '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#f59e0b;"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>' : ''}
                         </div>
                         \${isSubLocked ? '' : sub.links.map(link => {
                             const iconSrc = getFaviconUrl(link.url);
                             return \`
-                                <a href="\${link.url}" target="_blank" class="link-item" style="margin-left: 8px;">
+                                <a href="\${escAttr(link.url)}" target="_blank" class="link-item" style="margin-left: 8px;">
                                     <div class="link-icon"><img src="\${iconSrc}" /></div>
                                     <div class="link-info">
-                                        <div class="link-title">\${link.title}</div>
+                                        <div class="link-title">\${escHtml(link.title)}</div>
                                     </div>
                                 </a>
                             \`;

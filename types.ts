@@ -8,6 +8,7 @@ export interface LinkItem {
   createdAt: number;
   pinned?: boolean; // New field for pinning
   pinnedOrder?: number; // Field for pinned link sorting order
+  order?: number; // 链接在分类内的排序序号（拖拽排序/新增链接时写入）
 }
 
 export interface Category {

@@ -49,6 +49,76 @@ const WEBDAV_CONFIG_KEY = 'cloudnav_webdav_config';
 const AI_CONFIG_KEY = 'cloudnav_ai_config';
 const SEARCH_CONFIG_KEY = 'cloudnav_search_config';
 
+// 创建可排序的链接卡片组件（模块顶层定义，避免每次渲染重建组件导致全量重挂载）
+const SortableLinkCardBase = ({ link, cardStyle, sortingActive }: { link: LinkItem; cardStyle: 'detailed' | 'simple'; sortingActive: boolean }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: link.id });
+
+  const isDetailedView = cardStyle === 'detailed';
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition: isDragging ? 'none' : transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1000 : 'auto',
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group relative transition-all duration-200 cursor-grab active:cursor-grabbing min-w-0 max-w-full overflow-hidden hover:shadow-lg hover:shadow-green-100/50 dark:hover:shadow-green-900/20 ${
+        sortingActive
+          ? 'bg-green-100 dark:bg-green-900/30 border-green-200 dark:border-green-800'
+          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+      } ${isDragging ? 'shadow-2xl scale-105' : ''} ${
+        isDetailedView
+          ? 'flex flex-col rounded-2xl border shadow-sm p-4 min-h-[100px] hover:border-green-400 dark:hover:border-green-500'
+          : 'flex items-center rounded-xl border shadow-sm hover:border-green-300 dark:hover:border-green-600'
+      }`}
+      {...attributes}
+      {...listeners}
+    >
+      {/* 链接内容 - 移除a标签，改为div防止点击跳转 */}
+      <div className={`flex flex-1 min-w-0 overflow-hidden ${
+        isDetailedView ? 'flex-col' : 'items-center gap-3'
+      }`}>
+        {/* 第一行：图标和标题水平排列 */}
+        <div className={`flex items-center gap-3 mb-2 ${
+          isDetailedView ? '' : 'w-full'
+        }`}>
+          {/* Icon */}
+          <div className={`text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm font-bold uppercase shrink-0 ${
+            isDetailedView ? 'w-8 h-8 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-700 dark:to-slate-800' : 'w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-700'
+          }`}>
+              {link.icon ? <img src={link.icon} alt="" className="w-5 h-5"/> : link.title.charAt(0)}
+          </div>
+
+          {/* 标题 */}
+          <h3 className={`text-slate-900 dark:text-slate-100 truncate overflow-hidden text-ellipsis ${
+            isDetailedView ? 'text-base' : 'text-sm font-medium text-slate-800 dark:text-slate-200'
+          }`} title={link.title}>
+              {link.title}
+          </h3>
+        </div>
+
+        {/* 第二行：描述文字 */}
+        {isDetailedView && link.description && (
+          <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed line-clamp-2">
+            {link.description}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 function App() {
   // --- State ---
   const [links, setLinks] = useState<LinkItem[]>([]);
@@ -488,7 +558,7 @@ function App() {
         if (expiryTimeMs > 0 && timeDiff > expiryTimeMs) {
           localStorage.removeItem(AUTH_KEY);
           localStorage.removeItem('lastLoginTime');
-          setAuthToken(null);
+          setAuthToken('');
         } else {
           setAuthToken(savedToken);
         }
@@ -563,7 +633,7 @@ function App() {
                 // 如果返回401，可能是密码过期，清除本地token并要求重新登录
                 const errorData = await res.json();
                 if (errorData.error && errorData.error.includes('过期')) {
-                    setAuthToken(null);
+                    setAuthToken('');
                     localStorage.removeItem(AUTH_KEY);
                     setIsAuthOpen(true);
                     setIsCheckingAuth(false);
@@ -864,7 +934,7 @@ function App() {
                 const expiryTimeMs = (siteSettings.passwordExpiryDays || 7) > 0 ? (siteSettings.passwordExpiryDays || 7) * 24 * 60 * 60 * 1000 : 0;
                 
                 if (expiryTimeMs > 0 && timeDiff > expiryTimeMs) {
-                    setAuthToken(null);
+                    setAuthToken('');
                     localStorage.removeItem(AUTH_KEY);
                     setIsAuthOpen(true);
                     alert('您的密码已过期，请重新登录');
@@ -876,7 +946,9 @@ function App() {
             
             // 登录成功后，从服务器获取数据
             try {
-                const res = await fetch('/api/storage');
+                const res = await fetch('/api/storage', {
+                    headers: { 'x-auth-password': password }
+                });
                 if (res.ok) {
                     const data = await res.json();
                     // 如果服务器有数据，使用服务器数据
@@ -927,8 +999,10 @@ function App() {
   };
 
   const handleLogout = () => {
-      setAuthToken(null);
+      setAuthToken('');
       localStorage.removeItem(AUTH_KEY);
+      // 退出后重新锁定所有已解密的加密分类（大分类/子分类）
+      setUnlockedCategoryIds(new Set());
       setSyncStatus('offline');
       // 退出后重新加载本地数据
       loadFromLocal();
@@ -1074,7 +1148,9 @@ function App() {
   // 拖拽结束事件处理函数
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
     if (over && active.id !== over.id) {
       // 获取当前分类下的所有链接（包括子分类）
       const subCategoryIds = categories.filter(c => c.parentId === selectedCategory).map(c => c.id);
@@ -1085,16 +1161,16 @@ function App() {
       );
       
       // 找到被拖拽元素和目标元素的索引
-      const activeIndex = categoryLinks.findIndex(link => link.id === active.id);
-      const overIndex = categoryLinks.findIndex(link => link.id === over.id);
+      const activeIndex = categoryLinks.findIndex(link => link.id === activeId);
+      const overIndex = categoryLinks.findIndex(link => link.id === overId);
       
       if (activeIndex !== -1 && overIndex !== -1) {
         // 重新排序当前分类的链接
         const reorderedCategoryLinks = arrayMove(categoryLinks, activeIndex, overIndex);
         
         // 更新所有链接的顺序
-        const updatedLinks = links.map(link => {
-          const reorderedIndex = reorderedCategoryLinks.findIndex(l => l.id === link.id);
+        const updatedLinks = (links as LinkItem[]).map((link: LinkItem) => {
+          const reorderedIndex = (reorderedCategoryLinks as LinkItem[]).findIndex(l => l.id === link.id);
           if (reorderedIndex !== -1) {
             return { ...link, order: reorderedIndex };
           }
@@ -1112,14 +1188,17 @@ function App() {
   // 置顶链接拖拽结束事件处理函数
   const handlePinnedDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
 
-    if (over && active.id !== over.id) {
+    if (activeId !== overId) {
       // 获取所有置顶链接
       const pinnedLinksList = links.filter(link => link.pinned);
       
       // 找到被拖拽元素和目标元素的索引
-      const activeIndex = pinnedLinksList.findIndex(link => link.id === active.id);
-      const overIndex = pinnedLinksList.findIndex(link => link.id === over.id);
+      const activeIndex = pinnedLinksList.findIndex(link => link.id === activeId);
+      const overIndex = pinnedLinksList.findIndex(link => link.id === overId);
       
       if (activeIndex !== -1 && overIndex !== -1) {
         // 重新排序置顶链接
@@ -1127,7 +1206,7 @@ function App() {
         
         // 创建一个映射，存储每个置顶链接的新pinnedOrder
         const pinnedOrderMap = new Map<string, number>();
-        reorderedPinnedLinks.forEach((link, index) => {
+        (reorderedPinnedLinks as LinkItem[]).forEach((link, index) => {
           pinnedOrderMap.set(link.id, index);
         });
         
@@ -1799,9 +1878,9 @@ function App() {
   }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds]);
 
   // 计算其他目录的搜索结果
-  const otherCategoryResults = useMemo(() => {
+  const otherCategoryResults = useMemo<Record<string, LinkItem[]>>(() => {
     if (!searchQuery.trim() || selectedCategory === 'all') {
-      return [];
+      return {};
     }
 
     const q = searchQuery.toLowerCase();
@@ -1852,72 +1931,12 @@ function App() {
 
   // 创建可排序的链接卡片组件
   const SortableLinkCard = ({ link }: { link: LinkItem }) => {
-    const {
-      attributes,
-      listeners,
-      setNodeRef,
-      transform,
-      transition,
-      isDragging,
-    } = useSortable({ id: link.id });
-    
-    // 根据视图模式决定卡片样式
-    const isDetailedView = siteSettings.cardStyle === 'detailed';
-    
-    const style = {
-      transform: CSS.Transform.toString(transform),
-      transition: isDragging ? 'none' : transition,
-      opacity: isDragging ? 0.5 : 1,
-      zIndex: isDragging ? 1000 : 'auto',
-    };
-
     return (
-      <div
-        ref={setNodeRef}
-        style={style}
-        className={`group relative transition-all duration-200 cursor-grab active:cursor-grabbing min-w-0 max-w-full overflow-hidden hover:shadow-lg hover:shadow-green-100/50 dark:hover:shadow-green-900/20 ${
-          isSortingMode || isSortingPinned
-            ? 'bg-green-20 dark:bg-green-900/30 border-green-200 dark:border-green-800' 
-            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-        } ${isDragging ? 'shadow-2xl scale-105' : ''} ${
-          isDetailedView 
-            ? 'flex flex-col rounded-2xl border shadow-sm p-4 min-h-[100px] hover:border-green-400 dark:hover:border-green-500' 
-            : 'flex items-center rounded-xl border shadow-sm hover:border-green-300 dark:hover:border-green-600'
-        }`}
-        {...attributes}
-        {...listeners}
-      >
-        {/* 链接内容 - 移除a标签，改为div防止点击跳转 */}
-        <div className={`flex flex-1 min-w-0 overflow-hidden ${
-          isDetailedView ? 'flex-col' : 'items-center gap-3'
-        }`}>
-          {/* 第一行：图标和标题水平排列 */}
-          <div className={`flex items-center gap-3 mb-2 ${
-            isDetailedView ? '' : 'w-full'
-          }`}>
-            {/* Icon */}
-            <div className={`text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm font-bold uppercase shrink-0 ${
-              isDetailedView ? 'w-8 h-8 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-700 dark:to-slate-800' : 'w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-700'
-            }`}>
-                {link.icon ? <img src={link.icon} alt="" className="w-5 h-5"/> : link.title.charAt(0)}
-            </div>
-            
-            {/* 标题 */}
-            <h3 className={`text-slate-900 dark:text-slate-100 truncate overflow-hidden text-ellipsis ${
-              isDetailedView ? 'text-base' : 'text-sm font-medium text-slate-800 dark:text-slate-200'
-            }`} title={link.title}>
-                {link.title}
-            </h3>
-          </div>
-          
-          {/* 第二行：描述文字 */}
-             {isDetailedView && link.description && (
-               <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed line-clamp-2">
-                 {link.description}
-               </p>
-             )}
-        </div>
-      </div>
+      <SortableLinkCardBase
+        link={link}
+        cardStyle={siteSettings.cardStyle}
+        sortingActive={!!isSortingMode || isSortingPinned}
+      />
     );
   };
 
@@ -2132,6 +2151,7 @@ function App() {
         onClose={() => setIsLinkCheckModalOpen(false)}
         links={links}
         categories={categories}
+        authToken={authToken}
       />
 
       {/* Sidebar Mobile Overlay */}
@@ -2220,8 +2240,8 @@ function App() {
                       )}
                     </button>
 
-                    {/* 二级分类悬浮菜单 */}
-                    {hoveredCategory === cat.id && subCats.length > 0 && (
+                    {/* 二级分类悬浮菜单（加密分类未解锁时不显示，避免泄露子分类名） */}
+                    {hoveredCategory === cat.id && subCats.length > 0 && !isLocked && (
                       <div 
                           className="fixed left-64 w-[166px] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-2 z-[60] animate-in fade-in slide-in-from-left-2 duration-200 hidden lg:block"
                           style={{ top: hoveredCategoryTop }}
@@ -2675,7 +2695,8 @@ function App() {
                                           {isCategoryLocked(primaryCat.id) && <Lock size={14} className="text-amber-500" />}
                                         </div>
 
-                                        {subCats.length > 0 && (
+                                        {/* 父分类已锁定时隐藏子分类名，避免泄露 */}
+                                        {subCats.length > 0 && !isCategoryLocked(primaryCat.id) && (
                                           <>
                                             <div className="h-4 w-[1px] bg-slate-300 dark:bg-slate-600 mx-1" />
                                             <div className="flex items-center gap-4 overflow-x-auto no-scrollbar py-1">
@@ -2891,7 +2912,7 @@ function App() {
                 </h2>
 
                 {Object.keys(otherCategoryResults).length > 0 ? (
-                  Object.entries(otherCategoryResults).map(([categoryId, links]) => {
+                  (Object.entries(otherCategoryResults) as [string, LinkItem[]][]).map(([categoryId, links]) => {
                     const category = categories.find(c => c.id === categoryId);
                     if (!category) return null;
 

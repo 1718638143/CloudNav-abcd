@@ -10,6 +10,7 @@ interface LinkCheckModalProps {
   onClose: () => void;
   links: LinkItem[];
   categories: Category[];
+  authToken?: string;
 }
 
 type CheckStatus = 'idle' | 'checking' | 'ok' | 'dead' | 'unknown';
@@ -102,10 +103,11 @@ function probeWithImage(url: string, signal?: AbortSignal): Promise<boolean | nu
 
 /**
  * 检测单个链接：
- * 1. 优先用 <img> 探测站点 favicon（无 CORS 限制；onload/onerror 均代表域名可达）
+ * 0. 优先走后端 /api/check-link 精确探测（服务端 fetch 读真实 HTTP 状态码，需 authToken）
+ * 1. 后端不可用时回退 <img> favicon 探测（无 CORS 限制，域名级可达性）
  * 2. img 无法判断时回退 fetch no-cors 再试一次
  */
-async function checkLink(url: string, signal?: AbortSignal): Promise<CheckResult> {
+async function checkLink(url: string, signal?: AbortSignal, authToken?: string): Promise<CheckResult> {
   const raw = (url || '').trim();
   if (!raw) return { status: 'unknown', message: '链接为空' };
 
@@ -114,6 +116,38 @@ async function checkLink(url: string, signal?: AbortSignal): Promise<CheckResult
     target = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
   } catch {
     return { status: 'dead', message: 'URL 格式无效' };
+  }
+
+  // 0) 后端精确探测（真实 HTTP 状态码）
+  if (authToken) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS + 2000);
+      if (signal) {
+        if (signal.aborted) { clearTimeout(timer); return { status: 'unknown', message: '已取消' }; }
+        signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+      }
+      const res = await fetch('/api/check-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-auth-password': authToken },
+        body: JSON.stringify({ url: raw }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        const verdict = data.verdict as 'ok' | 'dead' | 'unknown';
+        const status = data.status as number;
+        if (verdict === 'ok') return { status: 'ok', httpStatus: status, message: `HTTP ${status}` };
+        if (verdict === 'dead') {
+          return { status: 'dead', httpStatus: status, message: status === 0 ? '无法连接或超时' : `HTTP ${status}` };
+        }
+        return { status: 'unknown', httpStatus: status, message: verdictMessage(status) };
+      }
+      // 后端报错（如未登录）则继续走前端探测
+    } catch (e) {
+      // 后端不可达，回退前端探测
+    }
   }
 
   // 1) 图片探测（favicon）——探测结果是"域名级"，站点根可达即认为链接可用
@@ -132,7 +166,7 @@ async function checkLink(url: string, signal?: AbortSignal): Promise<CheckResult
 }
 
 const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
-  isOpen, onClose, links, categories
+  isOpen, onClose, links, categories, authToken
 }) => {
   // ---------- 选择状态 ----------
   const [selected, setSelected] = useState<Set<string>>(new Set(['all']));
@@ -233,7 +267,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
       while (cursor < targets.length) {
         if (signal.aborted || runIdRef.current !== myRunId) return;
         const link = targets[cursor++];
-        const result = await checkLink(link.url, signal);
+        const result = await checkLink(link.url, signal, authToken);
         if (signal.aborted || runIdRef.current !== myRunId) return;
         setRows(prev => prev.map(r => (r.id === link.id ? { ...r, result } : r)));
         setProgress(p => ({ ...p, done: p.done + 1 }));
@@ -278,7 +312,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
     setRows(prev => prev.map(r => (r.id === row.id
       ? { ...r, result: { status: 'checking' as CheckStatus, message: '检测中...' } }
       : r)));
-    const result = await checkLink(row.url);
+    const result = await checkLink(row.url, undefined, authToken);
     setRows(prev => prev.map(r => (r.id === row.id ? { ...r, result } : r)));
   };
 

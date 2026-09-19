@@ -145,9 +145,11 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     
     // 如果是获取数据请求：访问验密开启时强制验密（保护网站数据不公开暴露）
     const requireLoginAccess = await getRequireLoginAccess(env);
+    let verified = false;
     if (url.searchParams.get('getConfig') === 'true' || requireLoginAccess) {
       const errRes = await verifyAccess(env, request);
       if (errRes) return errRes;
+      verified = true;
       
       // 更新最后认证时间
       await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
@@ -158,6 +160,42 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       return new Response(JSON.stringify({ links: [], categories: [] }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
+    }
+
+    // 未通过密码验证时：过滤带密码（隐私）分类的链接，并剥离分类的密码字段，
+    // 防止抓包直接读到受保护分类的链接数据
+    if (url.searchParams.get('getConfig') !== 'true' && !verified) {
+      try {
+        const parsed = JSON.parse(data);
+        const lockedIds = new Set(
+          (parsed.categories || [])
+            .filter((c: any) => c.password)
+            .map((c: any) => c.id as string)
+        );
+        if (lockedIds.size > 0) {
+          parsed.links = (parsed.links || []).filter((l: any) => !lockedIds.has(l.categoryId));
+        }
+        // 子分类跟随父分类：父分类锁定时其子分类也视为锁定
+        const parentOf = new Map((parsed.categories || []).map((c: any) => [c.id, c.parentId]));
+        const isLockedDeep = (id: string): boolean => {
+          let cur = id;
+          while (cur) {
+            if (lockedIds.has(cur)) return true;
+            cur = parentOf.get(cur) as string;
+          }
+          return false;
+        };
+        parsed.links = (parsed.links || []).filter((l: any) => !isLockedDeep(l.categoryId));
+        parsed.categories = (parsed.categories || []).map((c: any) => {
+          const { password, ...rest } = c;
+          return rest;
+        });
+        return new Response(JSON.stringify(parsed), {
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        });
+      } catch (e) {
+        // JSON 解析失败时按原样返回
+      }
     }
 
     return new Response(data, {
@@ -224,11 +262,21 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 如果是保存图标（允许无密码访问）
+    // 如果是保存图标（需密码校验，防止匿名滥用刷写 KV）
     if (body.saveConfig === 'favicon') {
+      if (serverPassword) {
+        if (!providedPassword || providedPassword !== serverPassword) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+      }
       const { domain, icon } = body;
-      if (!domain || !icon) {
-        return new Response(JSON.stringify({ error: 'Domain and icon are required' }), {
+      // domain 仅允许合法主机名，icon 限制长度（防滥用写入）
+      const domainOk = typeof domain === 'string' && /^[a-zA-Z0-9]([a-zA-Z0-9-]*\.)+[a-zA-Z]{2,}$/.test(domain);
+      if (!domainOk || !icon || typeof icon !== 'string' || icon.length > 8192) {
+        return new Response(JSON.stringify({ error: 'Invalid domain or icon' }), {
           status: 400,
           headers: { 'Content-Type': 'application/json', ...corsHeaders },
         });

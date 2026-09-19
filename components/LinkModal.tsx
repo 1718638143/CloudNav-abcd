@@ -95,7 +95,7 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       }
       
       // 将自定义图标保存到KV缓存
-      const authToken = localStorage.getItem('authToken');
+      const authToken = localStorage.getItem('cloudnav_auth_token');
       if (authToken) {
         await fetch('/api/storage', {
           method: 'POST',
@@ -225,7 +225,7 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       
       // 将图标保存到KV缓存
       try {
-        const authToken = localStorage.getItem('authToken');
+        const authToken = localStorage.getItem('cloudnav_auth_token');
         if (authToken) {
           await fetch('/api/storage', {
             method: 'POST',
