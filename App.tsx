@@ -1061,24 +1061,28 @@ function App() {
   };
 
   const handleImportConfirm = (newLinks: LinkItem[], newCategories: Category[]) => {
-      // Merge categories: Avoid duplicate names/IDs
+      // 方案A：保留备份中的分类ID与父子关系，不再按名称合并分类
       const mergedCategories = [...categories];
-      
-      // 确保"常用推荐"分类始终存在
+
       if (!mergedCategories.some(c => c.id === 'common')) {
         mergedCategories.push({ id: 'common', name: '常用推荐', icon: 'Star' });
       }
-      
+
       newCategories.forEach(nc => {
-          if (!mergedCategories.some(c => c.id === nc.id || c.name === nc.name)) {
+          if (!mergedCategories.some(c => c.id === nc.id)) {
               mergedCategories.push(nc);
           }
       });
 
-      const mergedLinks = [...links, ...newLinks];
+      // 仅按链接ID去重，保持原始 categoryId 不变
+      const existingLinkIds = new Set(links.map(l => l.id));
+      const linksToAdd = newLinks.filter(l => !existingLinkIds.has(l.id));
+
+      const mergedLinks = [...links, ...linksToAdd];
+
       updateData(mergedLinks, mergedCategories);
       setIsImportModalOpen(false);
-      alert(`成功导入 ${newLinks.length} 个新书签!`);
+      alert(`成功导入 ${linksToAdd.length} 个新书签!`);
   };
 
   const handleAddLink = (data: Omit<LinkItem, 'createdAt'>) => {
