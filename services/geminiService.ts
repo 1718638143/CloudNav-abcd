@@ -50,6 +50,83 @@ const callOpenAICompatible = async (config: AIConfig, systemPrompt: string, user
     }
 };
 
+export interface AIConnectionTestResult {
+  ok: boolean;
+  message: string;
+  models?: string[]; // OpenAI 兼容接口可用模型列表
+}
+
+/**
+ * Tests AI API connectivity with the given config.
+ * - Gemini: sends a minimal generateContent request
+ * - OpenAI Compatible: tries GET /models first, falls back to a minimal chat completion
+ */
+export const testAIConnection = async (config: AIConfig): Promise<AIConnectionTestResult> => {
+  if (!config.apiKey) {
+    return { ok: false, message: '请先填写 API Key' };
+  }
+
+  try {
+    if (config.provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey: config.apiKey });
+      const modelName = config.model || 'gemini-2.5-flash';
+      await ai.models.generateContent({
+        model: modelName,
+        contents: 'ping',
+      });
+      return { ok: true, message: `连接成功，模型 ${modelName} 可用` };
+    }
+
+    // OpenAI Compatible: resolve base url the same way as callOpenAICompatible
+    let base = config.baseUrl.replace(/\/$/, '');
+    if (base.includes('/chat/completions')) {
+      base = base.replace(/\/chat\/completions$/, '');
+    } else if (!base.endsWith('/v1')) {
+      base += '/v1';
+    }
+
+    // Try listing models first
+    try {
+      const res = await fetch(`${base}/models`, {
+        headers: { 'Authorization': `Bearer ${config.apiKey}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const models: string[] = (data.data || data.models || [])
+          .map((m: any) => m.id || m.name || '')
+          .filter(Boolean);
+        if (models.length > 0) {
+          return { ok: true, message: `连接成功，发现 ${models.length} 个可用模型`, models };
+        }
+        return { ok: true, message: '连接成功，但未返回模型列表' };
+      }
+    } catch {
+      // /models not supported, fall through to chat test
+    }
+
+    // Fallback: minimal chat completion
+    const res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 5
+      })
+    });
+    if (res.ok) {
+      return { ok: true, message: `连接成功，模型 ${config.model} 可用` };
+    }
+    const errText = await res.text();
+    return { ok: false, message: `连接失败 (${res.status}): ${errText.slice(0, 120)}` };
+  } catch (e: any) {
+    return { ok: false, message: `连接失败: ${e?.message || '网络错误'}` };
+  }
+};
+
 /**
  * Uses configured AI to generate a description
  */

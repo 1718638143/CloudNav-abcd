@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
   Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
-  Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save, CheckSquare, LogOut, ExternalLink, X, Activity
+  Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save, CheckSquare, LogOut, ExternalLink, X, Activity, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import {
   DndContext,
@@ -26,6 +26,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, WebDavConfig, AIConfig, SearchMode, ExternalSearchSource, SearchConfig } from './types';
 import { parseBookmarks } from './services/bookmarkParser';
+import { matchPinyinInitials } from './services/pinyinService';
 import Icon from './components/Icon';
 import LinkModal from './components/LinkModal';
 import AuthModal from './components/AuthModal';
@@ -127,6 +128,14 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // 桌面端侧边栏折叠状态（隐藏整个侧边栏，持久化到 localStorage）
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('cloudnav_sidebar_collapsed') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('cloudnav_sidebar_collapsed', String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
   
   // Search Mode State
   const [searchMode, setSearchMode] = useState<SearchMode>('external');
@@ -1843,6 +1852,20 @@ function App() {
       });
   }, [links, categories, unlockedCategoryIds]);
 
+  // 全站搜索匹配（含标题/URL/描述/分类名 + 拼音首字母）
+  const isLinkMatchSearch = (link: LinkItem, q: string): boolean => {
+    const matchText = (text?: string) => !!text && (
+      text.toLowerCase().includes(q) || matchPinyinInitials(text, q)
+    );
+    const cat = categories.find(c => c.id === link.categoryId);
+    return (
+      matchText(link.title) ||
+      matchText(link.url) ||
+      matchText(link.description) ||
+      matchText(cat?.name)
+    );
+  };
+
   const displayedLinks = useMemo(() => {
     let result = links;
     
@@ -1852,11 +1875,7 @@ function App() {
     // Search Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      result = result.filter(l => 
-        l.title.toLowerCase().includes(q) || 
-        l.url.toLowerCase().includes(q) ||
-        (l.description && l.description.toLowerCase().includes(q))
-      );
+      result = result.filter(l => isLinkMatchSearch(l, q));
     }
 
     // Category Filter
@@ -1875,7 +1894,7 @@ function App() {
       // 改为升序排序，这样order值小(旧卡片)的排在前面，order值大(新卡片)的排在后面
       return aOrder - bOrder;
     });
-  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds]);
+  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds, isLinkMatchSearch]);
 
   // 计算其他目录的搜索结果
   const otherCategoryResults = useMemo<Record<string, LinkItem[]>>(() => {
@@ -1898,11 +1917,7 @@ function App() {
       }
       
       // 搜索匹配
-      return (
-        link.title.toLowerCase().includes(q) || 
-        link.url.toLowerCase().includes(q) ||
-        (link.description && link.description.toLowerCase().includes(q))
-      );
+      return isLinkMatchSearch(link, q);
     });
 
     // 按目录分组
@@ -1924,7 +1939,7 @@ function App() {
     });
 
     return groupedByCategory;
-  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds]);
+  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds, isLinkMatchSearch]);
 
 
   // --- Render Components ---
@@ -2165,16 +2180,24 @@ function App() {
       {/* Sidebar */}
       <aside 
         className={`
-          fixed lg:static inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300 ease-in-out
+          fixed lg:static inset-y-0 left-0 z-50 w-64 transform transition-all duration-300 ease-in-out
           bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+          ${isSidebarCollapsed ? 'lg:-ml-64' : 'lg:translate-x-0'}
         `}
       >
         {/* Logo */}
-        <div className="h-16 flex items-center px-6 border-b border-slate-100 dark:border-slate-700 shrink-0">
+        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-100 dark:border-slate-700 shrink-0">
             <span className="text-xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
               {siteSettings.navTitle || 'CloudNav'}
             </span>
+            <button 
+              onClick={() => setIsSidebarCollapsed(true)}
+              className="hidden lg:flex p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
+              title="收起侧边栏"
+            >
+              <PanelLeftClose size={18} />
+            </button>
         </div>
 
         {/* Categories List */}
@@ -2346,6 +2369,17 @@ function App() {
             <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 -ml-2 text-slate-600 dark:text-slate-300">
               <Menu size={24} />
             </button>
+
+            {/* 桌面端：侧边栏收起后显示展开按钮 */}
+            {isSidebarCollapsed && (
+              <button 
+                onClick={() => setIsSidebarCollapsed(false)} 
+                className="hidden lg:flex p-2 -ml-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
+                title="显示侧边栏"
+              >
+                <PanelLeftOpen size={22} />
+              </button>
+            )}
 
             {/* 搜索模式切换 + 搜索框 */}
             <div className="flex items-center gap-3 flex-1 min-w-0">

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck } from 'lucide-react';
+import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck, Loader2 } from 'lucide-react';
 import { AIConfig, LinkItem, Category, SiteSettings } from '../types';
-import { generateLinkDescription } from '../services/geminiService';
+import { generateLinkDescription, testAIConnection, AIConnectionTestResult } from '../services/geminiService';
 import JSZip from 'jszip';
 
 interface SettingsModalProps {
@@ -85,6 +85,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isZipping, setIsZipping] = useState(false);
   
   const [copiedStates, setCopiedStates] = useState<{[key: string]: boolean}>({});
+  
+  // AI 连接测试状态
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState<AIConnectionTestResult | null>(null);
 
   const updateGeneratedIcons = (text: string) => {
       const newIcons: string[] = [];
@@ -1222,6 +1226,57 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 placeholder={localConfig.provider === 'gemini' ? "gemini-2.5-flash" : "gpt-3.5-turbo"}
                                 className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
                             />
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
+                            <h4 className="text-sm font-semibold mb-2 dark:text-slate-200">连接测试</h4>
+                            <button 
+                                onClick={async () => {
+                                    setIsTestingConnection(true);
+                                    setConnectionTestResult(null);
+                                    const result = await testAIConnection(localConfig);
+                                    setConnectionTestResult(result);
+                                    setIsTestingConnection(false);
+                                }}
+                                disabled={isTestingConnection || !localConfig.apiKey || (localConfig.provider === 'openai' && !localConfig.baseUrl)}
+                                className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-colors border border-blue-200 dark:border-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={!localConfig.apiKey ? '请先填写 API Key' : '测试当前 AI 配置能否正常连通'}
+                            >
+                                {isTestingConnection ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+                                {isTestingConnection ? '测试中...' : '测试连接'}
+                            </button>
+                            {connectionTestResult && (
+                                <div className={`mt-3 p-3 rounded-lg border text-sm ${
+                                    connectionTestResult.ok 
+                                        ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200 border-green-200 dark:border-green-900/50' 
+                                        : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 border-red-200 dark:border-red-900/50'
+                                }`}>
+                                    <div className="flex items-center gap-2 font-medium">
+                                        {connectionTestResult.ok ? <Check size={16} /> : <AlertTriangle size={16} />}
+                                        {connectionTestResult.message}
+                                    </div>
+                                    {connectionTestResult.models && connectionTestResult.models.length > 0 && (
+                                        <div className="mt-2">
+                                            <p className="text-xs opacity-70 mb-1">可用模型（点击填入）：</p>
+                                            <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                                                {connectionTestResult.models.map(m => (
+                                                    <button
+                                                        key={m}
+                                                        onClick={() => handleChange('model', m)}
+                                                        className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+                                                            localConfig.model === m
+                                                                ? 'bg-blue-600 text-white border-blue-600'
+                                                                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-600 hover:border-blue-400'
+                                                        }`}
+                                                    >
+                                                        {m}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
