@@ -116,8 +116,9 @@ const ImportModal: React.FC<ImportModalProps> = ({
         });
 
         // 3. Category Diff
-        const existingCategoryNames = new Set(categories.map(c => c.name));
-        const uniqueNewCategories = result.categories.filter(c => !existingCategoryNames.has(c.name));
+        // 使用 ID 作为唯一标识，避免同名父/子分类被错误合并
+        const existingCategoryIds = new Set(categories.map(c => c.id));
+        const uniqueNewCategories = result.categories.filter(c => !existingCategoryIds.has(c.id));
 
         setParsedLinks(uniqueNewLinks);
         setParsedCategories(uniqueNewCategories);
@@ -157,33 +158,59 @@ const ImportModal: React.FC<ImportModalProps> = ({
           // Since parseBookmarks generates IDs for categories, if a category name already exists in `categories`, 
           // we should remap the links to the existing category ID instead of creating a new duplicate-named category.
           
-          const nameToIdMap = new Map<string, string>();
-          categories.forEach(c => nameToIdMap.set(c.name, c.id));
+                    const existingCategoryIds = new Set(categories.map(c => c.id));
 
-          // Valid new categories to add
-          const categoriesToAdd: Category[] = [];
+          const allCategories = [...categories, ...parsedCategories];
 
-          parsedCategories.forEach(pc => {
-              if (nameToIdMap.has(pc.name)) {
-                  // Category exists, we don't add it.
-                  // But we need to know its ID to remap links.
-              } else {
-                  categoriesToAdd.push(pc);
-                  nameToIdMap.set(pc.name, pc.id); // Add new one to map
-              }
+          const buildCategoryPath = (categoryId: string): string => {
+            const categoryMap = new Map(allCategories.map(c => [c.id, c]));
+            const parts: string[] = [];
+            let current = categoryMap.get(categoryId);
+
+            while (current) {
+              parts.unshift(current.name);
+              current = current.parentId ? categoryMap.get(current.parentId) : undefined;
+            }
+
+            return parts.join('/');
+          };
+
+          const existingPathMap = new Map(
+            categories.map(c => [buildCategoryPath(c.id), c.id])
+          );
+
+          const importPathMap = new Map(
+            parsedCategories.map(c => [buildCategoryPath(c.id), c.id])
+          );
+
+          // 优先ID，其次路径；允许不同父分类下同名子分类共存
+          const categoriesToAdd: Category[] = parsedCategories.filter(c => {
+            if (existingCategoryIds.has(c.id)) return false;
+
+            const path = buildCategoryPath(c.id);
+            return !existingPathMap.has(path);
           });
 
-          // Remap links
           finalLinks = finalLinks.map(link => {
-             // Find the name of the category this link was assigned to in the parser
-             const originalCat = parsedCategories.find(c => c.id === link.categoryId) 
-                                 || categories.find(c => c.id === link.categoryId); // Fallback
-             
-             if (originalCat && nameToIdMap.has(originalCat.name)) {
-                 return { ...link, categoryId: nameToIdMap.get(originalCat.name)! };
-             }
-             // If for some reason we can't find the map, put it in common
-             return { ...link, categoryId: 'common' };
+            const categoryExists =
+              categories.some(c => c.id === link.categoryId) ||
+              categoriesToAdd.some(c => c.id === link.categoryId);
+
+            if (categoryExists) {
+              return link;
+            }
+
+            const path = importPathMap.has(
+              parsedCategories.find(c => c.id === link.categoryId)?.id || ''
+            )
+              ? buildCategoryPath(link.categoryId)
+              : '';
+
+            const matchedCategoryId = existingPathMap.get(path);
+
+            return matchedCategoryId
+              ? { ...link, categoryId: matchedCategoryId }
+              : { ...link, categoryId: 'common' };
           });
 
           finalCategories = categoriesToAdd;
