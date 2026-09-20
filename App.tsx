@@ -2205,13 +2205,23 @@ function App() {
             <span className="text-xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
               {siteSettings.navTitle || 'CloudNav'}
             </span>
-            <button 
-              onClick={() => setIsSidebarCollapsed(true)}
-              className="hidden lg:flex p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
-              title="收起侧边栏"
-            >
-              <PanelLeftClose size={18} />
-            </button>
+            <>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="flex lg:hidden p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
+                title="关闭侧边栏"
+              >
+                <X size={20} />
+              </button>
+
+              <button 
+                onClick={() => setIsSidebarCollapsed(true)}
+                className="hidden lg:flex p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
+                title="收起侧边栏"
+              >
+                <PanelLeftClose size={18} />
+              </button>
+            </>
         </div>
 
         {/* Categories List */}
