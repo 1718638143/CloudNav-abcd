@@ -6,7 +6,7 @@ import { generateLinkDescription, suggestCategory } from '../services/geminiServ
 interface LinkModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (link: Omit<LinkItem, 'id' | 'createdAt'>) => void;
+  onSave: (link: Omit<LinkItem, 'createdAt'>) => void;
   onDelete?: (id: string) => void;
   categories: Category[];
   initialData?: LinkItem;

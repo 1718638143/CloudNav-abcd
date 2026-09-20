@@ -26,6 +26,16 @@ export interface SiteSettings {
   cardStyle: 'detailed' | 'simple';
   passwordExpiryDays: number; // 密码过期天数，0表示永久不退出
   requireLoginAccess?: boolean; // 打开网站时是否先验密（默认开启）
+  wallpaper?: WallpaperSettings; // 主区域背景壁纸（仅内容区显示，不影响卡片）
+}
+
+// 壁纸设置：url 支持图片直链或随机图接口（每次刷新返回新图）
+export interface WallpaperSettings {
+  url: string; // 图片 URL 或接口地址，空字符串表示不启用
+  blur: number; // 模糊 px（0-30）
+  brightness: number; // 亮度 0.1-2，默认 1
+  saturate: number; // 饱和度 0-3，默认 1
+  mask: number; // 渐变遮罩强度 0-1，1 表示内容区几乎不透出壁纸，保证文字可读
 }
 
 export interface AppState {

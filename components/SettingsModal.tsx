@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck, Loader2 } from 'lucide-react';
-import { AIConfig, LinkItem, Category, SiteSettings } from '../types';
+import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck, Loader2, Image as ImageIcon } from 'lucide-react';
+import { AIConfig, LinkItem, Category, SiteSettings, WallpaperSettings } from '../types';
 import { generateLinkDescription, testAIConnection, AIConnectionTestResult } from '../services/geminiService';
 import JSZip from 'jszip';
 
@@ -61,7 +61,7 @@ const generateSvgIcon = (text: string, color1: string, color2: string) => {
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
     isOpen, onClose, config, siteSettings, onSave, links, categories, onUpdateLinks, authToken, onToggleRequireLogin 
 }) => {
-  const [activeTab, setActiveTab] = useState<'site' | 'ai' | 'tools'>('site');
+  const [activeTab, setActiveTab] = useState<'site' | 'wallpaper' | 'ai' | 'tools'>('site');
   const [localConfig, setLocalConfig] = useState<AIConfig>(config);
   
   const [localSiteSettings, setLocalSiteSettings] = useState<SiteSettings>(() => ({
@@ -90,6 +90,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionTestResult, setConnectionTestResult] = useState<AIConnectionTestResult | null>(null);
 
+  // 壁纸设置（本地实时预览，保存时随站点设置一起提交）
+  const [wallpaper, setWallpaper] = useState<WallpaperSettings>(() => ({
+      url: siteSettings?.wallpaper?.url || '',
+      blur: siteSettings?.wallpaper?.blur ?? 0,
+      brightness: siteSettings?.wallpaper?.brightness ?? 1,
+      saturate: siteSettings?.wallpaper?.saturate ?? 1,
+      mask: siteSettings?.wallpaper?.mask ?? 0.4
+  }));
+
   const updateGeneratedIcons = (text: string) => {
       const newIcons: string[] = [];
       for (let i = 0; i < 6; i++) {
@@ -110,10 +119,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           favicon: siteSettings?.favicon || '',
           cardStyle: siteSettings?.cardStyle || 'detailed',
           passwordExpiryDays: siteSettings?.passwordExpiryDays ?? 7,
-          requireLoginAccess: siteSettings?.requireLoginAccess ?? true
+          requireLoginAccess: siteSettings?.requireLoginAccess ?? true,
+          wallpaper: siteSettings?.wallpaper
       };
       setLocalSiteSettings(safeSettings);
       setRequireLogin(siteSettings?.requireLoginAccess ?? true);
+      setWallpaper({
+          url: safeSettings.wallpaper?.url || '',
+          blur: safeSettings.wallpaper?.blur ?? 0,
+          brightness: safeSettings.wallpaper?.brightness ?? 1,
+          saturate: safeSettings.wallpaper?.saturate ?? 1,
+          mask: safeSettings.wallpaper?.mask ?? 0.4
+      });
       if (generatedIcons.length === 0) {
           updateGeneratedIcons(safeSettings.navTitle);
       }
@@ -169,8 +186,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSave = () => {
-    // 保存时带上验密开关，避免覆盖丢失
-    onSave(localConfig, { ...localSiteSettings, requireLoginAccess: requireLogin });
+    // 保存时带上验密开关与壁纸设置，避免覆盖丢失
+    onSave(localConfig, { ...localSiteSettings, requireLoginAccess: requireLogin, wallpaper });
     onClose();
   };
 
@@ -1035,6 +1052,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const tabs = [
     { id: 'site', label: '网站设置', icon: LayoutTemplate },
+    { id: 'wallpaper', label: '壁纸设置', icon: ImageIcon },
     { id: 'ai', label: 'AI 设置', icon: Bot },
     { id: 'tools', label: '扩展工具', icon: Wrench },
   ];
@@ -1172,6 +1190,114 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 <p className="text-xs text-slate-500 mt-1">设置为 0 表示永久不退出，默认 7 天后自动退出</p>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                {activeTab === 'wallpaper' && (
+                    <div className="space-y-6 animate-in fade-in duration-300">
+                            {/* 壁纸设置 */}
+                            <div className="space-y-4">
+                                <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                                    <ImageIcon size={15} className="text-blue-500" />
+                                    背景壁纸
+                                </label>
+                                <p className="text-xs text-slate-500 mb-3">支持图片直链或随机图接口（如 https://picsum.photos/1920/1080），壁纸固定铺满整个窗口，不随侧边栏展开/收起变化，保持图片比例</p>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="text"
+                                        value={wallpaper.url}
+                                        onChange={(e) => setWallpaper(prev => ({ ...prev, url: e.target.value }))}
+                                        placeholder="https://picsum.photos/1920/1080"
+                                        className="flex-1 p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                    />
+                                    {wallpaper.url && (
+                                        <button
+                                            onClick={() => setWallpaper(prev => ({ ...prev, url: '' }))}
+                                            className="px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-900/50 transition-colors"
+                                            title="清除壁纸"
+                                        >
+                                            清除
+                                        </button>
+                                    )}
+                                </div>
+
+                                {wallpaper.url && (
+                                    <div className="mt-4 space-y-4">
+                                        {/* 预览 */}
+                                        <div className="relative h-32 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600 bg-slate-100 dark:bg-slate-800">
+                                            <img
+                                                src={wallpaper.url}
+                                                alt="壁纸预览"
+                                                className="w-full h-full object-cover"
+                                                style={{
+                                                    filter: `blur(${wallpaper.blur}px) brightness(${wallpaper.brightness}) saturate(${wallpaper.saturate})`,
+                                                    transform: wallpaper.blur > 0 ? 'scale(1.1)' : undefined
+                                                }}
+                                                onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0'; }}
+                                            />
+                                            <div
+                                                className="absolute inset-0 flex items-center justify-center"
+                                                style={{ background: `rgba(248,250,252,${wallpaper.mask})` }}
+                                            >
+                                                <span className="text-xs text-slate-500 bg-white/80 dark:bg-slate-800/80 px-2 py-1 rounded">遮罩效果预览</span>
+                                            </div>
+                                        </div>
+
+                                        {/* 模糊 */}
+                                        <div>
+                                            <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                <span>模糊程度</span><span>{wallpaper.blur}px</span>
+                                            </div>
+                                            <input
+                                                type="range" min="0" max="30" step="1"
+                                                value={wallpaper.blur}
+                                                onChange={(e) => setWallpaper(prev => ({ ...prev, blur: parseInt(e.target.value) }))}
+                                                className="w-full accent-blue-600"
+                                            />
+                                        </div>
+
+                                        {/* 亮度 */}
+                                        <div>
+                                            <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                <span>亮度</span><span>{wallpaper.brightness.toFixed(2)}</span>
+                                            </div>
+                                            <input
+                                                type="range" min="0.2" max="2" step="0.05"
+                                                value={wallpaper.brightness}
+                                                onChange={(e) => setWallpaper(prev => ({ ...prev, brightness: parseFloat(e.target.value) }))}
+                                                className="w-full accent-blue-600"
+                                            />
+                                        </div>
+
+                                        {/* 饱和度 */}
+                                        <div>
+                                            <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                <span>饱和度</span><span>{wallpaper.saturate.toFixed(2)}</span>
+                                            </div>
+                                            <input
+                                                type="range" min="0" max="3" step="0.05"
+                                                value={wallpaper.saturate}
+                                                onChange={(e) => setWallpaper(prev => ({ ...prev, saturate: parseFloat(e.target.value) }))}
+                                                className="w-full accent-blue-600"
+                                            />
+                                        </div>
+
+                                        {/* 遮罩强度 */}
+                                        <div>
+                                            <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                <span>白色遮罩（文字可读性）</span><span>{Math.round(wallpaper.mask * 100)}%</span>
+                                            </div>
+                                            <input
+                                                type="range" min="0" max="1" step="0.05"
+                                                value={wallpaper.mask}
+                                                onChange={(e) => setWallpaper(prev => ({ ...prev, mask: parseFloat(e.target.value) }))}
+                                                className="w-full accent-blue-600"
+                                            />
+                                            <p className="text-[10px] text-slate-400 mt-1">调低壁纸更鲜艳，调高文字更清晰</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                     </div>
                 )}
 
