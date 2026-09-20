@@ -169,7 +169,8 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
   isOpen, onClose, links, categories, authToken
 }) => {
   // ---------- 选择状态 ----------
-  const [selected, setSelected] = useState<Set<string>>(new Set(['all']));
+  // 默认不勾选「全部分类」，由用户主动选择范围
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // ---------- 运行状态 ----------
@@ -181,7 +182,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setSelected(new Set(['all']));
+      setSelected(new Set());
       setExpanded(new Set());
       setRows([]);
       setProgress({ done: 0, total: 0 });
@@ -241,9 +242,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
   const toggleCat = (id: string) => {
     setSelected(prev => {
       const next = new Set(prev);
-      next.delete('all');
       if (next.has(id)) next.delete(id); else next.add(id);
-      if (next.size === 0) next.add('all');
       return next;
     });
   };
@@ -365,27 +364,33 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
 
   const summaryBlock = (
     <div className="grid grid-cols-3 gap-2">
-      <div className="flex items-center justify-center gap-1.5 p-2 rounded-lg bg-green-50 dark:bg-green-900/20">
-        <CheckCircle2 size={14} className="text-green-500" />
-        <span className="text-xs text-slate-600 dark:text-slate-300">可用</span>
-        <span className="text-sm font-bold text-green-600 dark:text-green-400">{stats.ok}</span>
+      <div className="flex flex-col items-center justify-center p-2.5 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900/40">
+        <div className="flex items-center gap-1 text-green-600 dark:text-green-400">
+          <CheckCircle2 size={13} />
+          <span className="text-xs">可用</span>
+        </div>
+        <span className="text-lg font-bold leading-tight text-green-600 dark:text-green-400">{stats.ok}</span>
       </div>
-      <div className="flex items-center justify-center gap-1.5 p-2 rounded-lg bg-red-50 dark:bg-red-900/20">
-        <XCircle size={14} className="text-red-500" />
-        <span className="text-xs text-slate-600 dark:text-slate-300">失效</span>
-        <span className="text-sm font-bold text-red-500">{stats.dead}</span>
+      <div className="flex flex-col items-center justify-center p-2.5 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/40">
+        <div className="flex items-center gap-1 text-red-500">
+          <XCircle size={13} />
+          <span className="text-xs">失效</span>
+        </div>
+        <span className="text-lg font-bold leading-tight text-red-500">{stats.dead}</span>
       </div>
-      <div className="flex items-center justify-center gap-1.5 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20">
-        <HelpCircle size={14} className="text-amber-500" />
-        <span className="text-xs text-slate-600 dark:text-slate-300">待确认</span>
-        <span className="text-sm font-bold text-amber-500">{stats.unknown}</span>
+      <div className="flex flex-col items-center justify-center p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/40">
+        <div className="flex items-center gap-1 text-amber-500">
+          <HelpCircle size={13} />
+          <span className="text-xs">待确认</span>
+        </div>
+        <span className="text-lg font-bold leading-tight text-amber-500">{stats.unknown}</span>
       </div>
     </div>
   );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200 dark:border-slate-700 max-h-[90vh] flex flex-col">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl h-[85vh] max-h-[700px] overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col">
         {/* 标题栏 */}
         <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
           <h3 className="text-lg font-semibold dark:text-white flex items-center gap-2">
@@ -396,9 +401,9 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 min-h-0 overflow-hidden p-4 flex flex-col gap-4">
           {/* 分类选择 */}
-          <section>
+          <section className="shrink-0">
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-sm font-medium text-slate-700 dark:text-slate-200">选择检测范围</h4>
               <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-500 dark:text-slate-400">
@@ -412,7 +417,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
               </label>
             </div>
             <div
-              className={`max-h-44 overflow-y-auto rounded-xl border p-2 space-y-1 transition-opacity ${
+              className={`max-h-36 overflow-y-auto rounded-xl border bg-slate-50/50 dark:bg-slate-700/20 p-2 space-y-0.5 transition-opacity ${
                 selected.has('all')
                   ? 'border-slate-200 dark:border-slate-700 opacity-40 pointer-events-none'
                   : 'border-slate-200 dark:border-slate-700'
@@ -437,17 +442,21 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
                       )}
                       <button
                         onClick={() => toggleCat(cat.id)}
-                        className={`flex-1 flex items-center justify-between px-2.5 py-1.5 rounded-lg text-sm transition-colors ${
+                        className={`flex-1 flex items-center justify-between px-2.5 py-2 rounded-lg text-sm transition-colors ${
                           selected.has(cat.id)
-                            ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-300'
+                            ? 'bg-blue-100/70 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 font-medium'
+                            : 'hover:bg-white dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300'
                         }`}
                       >
                         <span className="flex items-center gap-2 truncate">
                           <span className="text-sm leading-none">{cat.icon}</span>
                           <span className="truncate">{cat.name}</span>
                         </span>
-                        <span className="text-xs text-slate-400 shrink-0 ml-2">{topCount} 个</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ml-2 ${
+                          selected.has(cat.id)
+                            ? 'bg-blue-500/10 text-blue-500'
+                            : 'bg-slate-200/70 dark:bg-slate-600/40 text-slate-400'
+                        }`}>{topCount}</span>
                       </button>
                     </div>
                     {subs.length > 0 && isExpanded && (
@@ -460,15 +469,19 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
                               onClick={() => toggleCat(sub.id)}
                               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-sm transition-colors ${
                                 selected.has(sub.id)
-                                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300'
-                                  : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-600 dark:text-slate-400'
+                                  ? 'bg-blue-100/70 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 font-medium'
+                                  : 'hover:bg-white dark:hover:bg-slate-700/60 text-slate-600 dark:text-slate-400'
                               }`}
                             >
                               <span className="flex items-center gap-2 truncate">
                                 <span className="text-sm leading-none">{sub.icon}</span>
                                 <span className="truncate">{sub.name}</span>
                               </span>
-                              <span className="text-xs text-slate-400 shrink-0 ml-2">{count} 个</span>
+                              <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ml-2 ${
+                                selected.has(sub.id)
+                                  ? 'bg-blue-500/10 text-blue-500'
+                                  : 'bg-slate-200/70 dark:bg-slate-600/40 text-slate-400'
+                              }`}>{count}</span>
                             </button>
                           );
                         })}
@@ -480,10 +493,10 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
               {links.some(l => !categories.some(c => c.id === l.categoryId)) && (
                 <button
                   onClick={() => toggleCat('__uncategorized__')}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-sm transition-colors ${
+                  className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-sm transition-colors ${
                     selected.has('__uncategorized__')
-                      ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300'
-                      : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-600 dark:text-slate-400'
+                      ? 'bg-blue-100/70 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 font-medium'
+                      : 'hover:bg-white dark:hover:bg-slate-700/60 text-slate-600 dark:text-slate-400'
                   }`}
                 >
                   <span className="truncate">未分类</span>
@@ -491,15 +504,27 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
               )}
             </div>
             {!selected.has('all') && (
-              <p className="text-xs text-slate-400 mt-1.5">
-                将检测 <span className="text-blue-500 font-medium">{targetLinks.length}</span> 个链接
-              </p>
+              <div className="flex items-center justify-between mt-2 px-1">
+                <p className="text-xs text-slate-400">
+                  已选 <span className="text-blue-500 font-medium">{selected.size}</span> 个分类，共
+                  <span className="text-blue-500 font-medium mx-0.5">{targetLinks.length}</span>
+                  个链接
+                </p>
+                {selected.size > 0 && (
+                  <button
+                    onClick={() => setSelected(new Set())}
+                    className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                  >
+                    清空选择
+                  </button>
+                )}
+              </div>
             )}
           </section>
 
           {/* 统计 */}
           {(rows.length > 0 || isRunning) && (
-            <section className="space-y-2">
+            <section className="shrink-0 space-y-2">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-medium text-slate-700 dark:text-slate-200">检测统计</h4>
                 <span className="text-xs text-slate-400">
@@ -518,9 +543,9 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
             </section>
           )}
 
-          {/* 检测结果 */}
+          {/* 检测结果（弹性区域：占据剩余高度，内部统一滚动） */}
           {rows.length > 0 && (
-            <section className="space-y-2">
+            <section className="flex-1 min-h-0 flex flex-col">
               {deadRows.length > 0 && (
                 <div>
                   <h4 className="flex items-center gap-1.5 text-sm font-medium text-red-500 mb-1 px-1">
@@ -542,11 +567,11 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
                 </div>
               )}
               {stats.ok > 0 && (
-                <div>
-                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400 mb-1 px-1">
+                <div className="flex flex-col min-h-0 flex-1">
+                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400 mb-1 px-1 shrink-0">
                     <ShieldCheck size={14} /> 可用链接（{stats.ok}）
                   </h4>
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 max-h-56 overflow-y-auto">
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 overflow-y-auto">
                     {rows.filter(r => r.result.status === 'ok').map(renderRow)}
                   </div>
                 </div>
@@ -555,17 +580,24 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
           )}
 
           {rows.length === 0 && !isRunning && (
-            <div className="text-center py-8 text-sm text-slate-400">
-              <Link2 size={32} className="mx-auto mb-2 opacity-40" />
-              选择范围后点击"开始检测"，将逐个验证链接是否可访问
+            <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-center text-sm text-slate-400 rounded-xl border border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-700/20 px-4 overflow-hidden">
+              <Link2 size={28} className="mb-2 shrink-0 opacity-40" />
+              <p className="shrink-0">选择分类后点击「开始检测」</p>
+              <p className="text-xs mt-1 shrink-0 text-slate-400/80">将逐个验证链接是否可访问，并统计可用/失效数量</p>
             </div>
           )}
         </div>
 
         {/* 底部操作栏 */}
-        <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between shrink-0">
+        <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/60 flex items-center justify-between shrink-0">
           <span className="text-xs text-slate-400">
-            {selected.has('all') ? `全部 ${targetLinks.length} 个链接` : `${targetLinks.length} 个链接`}
+            {isRunning
+              ? `正在检测 ${progress.done}/${progress.total}`
+              : selected.has('all')
+                ? `全部 ${targetLinks.length} 个链接`
+                : targetLinks.length > 0
+                  ? `${targetLinks.length} 个链接待检测`
+                  : '请先选择检测范围'}
           </span>
           <div className="flex items-center gap-2">
             {rows.length > 0 && !isRunning && (

@@ -2084,7 +2084,7 @@ function App() {
       {/* 主要内容 - 只有在不需要认证或已认证时显示 */}
       {(!requiresAuth || authToken) && (
         <>
-          <AuthModal isOpen={isAuthOpen} onLogin={handleLogin} />
+          <AuthModal isOpen={isAuthOpen} onLogin={handleLogin} onClose={() => setIsAuthOpen(false)} />
       
       <CategoryAuthModal 
         isOpen={!!catAuthModalData}
