@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck, Loader2, Image as ImageIcon } from 'lucide-react';
-import { AIConfig, LinkItem, Category, SiteSettings, WallpaperSettings } from '../types';
+import { X, Save, Bot, Key, Globe, Sparkles, PauseCircle, Wrench, Box, Copy, Check, LayoutTemplate, RefreshCw, Info, Download, Sidebar, Keyboard, MousePointerClick, AlertTriangle, Package, Zap, Menu, ShieldCheck, Loader2, Image as ImageIcon, Cloud, Upload, DatabaseBackup, CloudUpload, Trash2 } from 'lucide-react';
+import { AIConfig, LinkItem, Category, SiteSettings, WallpaperSettings, SearchConfig } from '../types';
 import { generateLinkDescription, testAIConnection, AIConnectionTestResult } from '../services/geminiService';
+import { saveKvBackup, listKvBackups, downloadKvBackup, deleteKvBackup, KvBackupFile } from '../services/kvBackupService';
 import JSZip from 'jszip';
 
 interface SettingsModalProps {
@@ -15,6 +16,11 @@ interface SettingsModalProps {
   onUpdateLinks: (links: LinkItem[]) => void;
   authToken: string | null;
   onToggleRequireLogin: (enabled: boolean) => void;
+  searchConfig: SearchConfig;
+  aiConfig: AIConfig;
+  onRestore: (links: LinkItem[], categories: Category[]) => void;
+  onRestoreSearchConfig: (searchConfig: SearchConfig) => void;
+  onRestoreAIConfig: (aiConfig: AIConfig) => void;
 }
 
 const getRandomColor = () => {
@@ -59,9 +65,10 @@ const generateSvgIcon = (text: string, color1: string, color2: string) => {
 };
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
-    isOpen, onClose, config, siteSettings, onSave, links, categories, onUpdateLinks, authToken, onToggleRequireLogin 
+    isOpen, onClose, config, siteSettings, onSave, links, categories, onUpdateLinks, authToken, onToggleRequireLogin,
+    searchConfig, aiConfig, onRestore, onRestoreSearchConfig, onRestoreAIConfig
 }) => {
-  const [activeTab, setActiveTab] = useState<'site' | 'wallpaper' | 'ai' | 'tools'>('site');
+  const [activeTab, setActiveTab] = useState<'site' | 'wallpaper' | 'ai' | 'tools' | 'backup'>('site');
   const [localConfig, setLocalConfig] = useState<AIConfig>(config);
   
   const [localSiteSettings, setLocalSiteSettings] = useState<SiteSettings>(() => ({
@@ -98,6 +105,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       saturate: siteSettings?.wallpaper?.saturate ?? 1,
       mask: siteSettings?.wallpaper?.mask ?? 0.4
   }));
+
+  // 备份恢复 tab 状态（Cloudflare KV 存储）
+  const [bkStatus, setBkStatus] = useState<'idle' | 'busy' | 'success' | 'error'>('idle');
+  const [bkMsg, setBkMsg] = useState('');
+  const [backupFiles, setBackupFiles] = useState<KvBackupFile[]>([]);
+  const [isListing, setIsListing] = useState(false);
+  const [listMsg, setListMsg] = useState('');
+  const [restoringFile, setRestoringFile] = useState<string | null>(null);
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
 
   const updateGeneratedIcons = (text: string) => {
       const newIcons: string[] = [];
@@ -143,46 +159,101 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       const storedToken = localStorage.getItem('cloudnav_auth_token');
       if (storedToken) setPassword(storedToken);
     }
-  }, [isOpen, config, siteSettings]);
+    // 仅在打开时同步一次，避免保存后重置其他 tab 的未保存修改
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleChange = (key: keyof AIConfig, value: string) => {
     setLocalConfig(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleSiteChange = async (key: keyof SiteSettings, value: any) => {
-    setLocalSiteSettings(prev => {
-        const next = { ...prev, [key]: value };
-        
-        // 如果是身份验证过期天数修改，立即保存到 KV 空间
-        if (key === 'passwordExpiryDays' && authToken) {
-            saveWebsiteConfigToKV(next);
-        }
-        
-        return next;
-    });
+  // ============ 备份恢复 tab（Cloudflare KV 存储）============
+  const handleBkUpload = async (withTimestamp: boolean) => {
+    if (!authToken) {
+        setBkStatus('error');
+        setBkMsg('请先登录后再使用在线备份。');
+        return;
+    }
+    setBkStatus('busy');
+    setBkMsg('正在上传...');
+    const result = await saveKvBackup(authToken, { links, categories, searchConfig, aiConfig });
+    if (result.success === false) {
+        setBkStatus('error');
+        setBkMsg(result.error);
+        return;
+    }
+    setBkStatus('success');
+    setBkMsg(withTimestamp ? `快照备份成功！共 ${result.total} 份备份` : '备份成功！');
+    handleBkList();
   };
 
-  // 保存网站配置到 KV 空间
-  const saveWebsiteConfigToKV = async (siteSettings: SiteSettings) => {
-    try {
-        const response = await fetch('/api/storage', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-auth-password': authToken || ''
-            },
-            body: JSON.stringify({
-                saveConfig: 'website',
-                config: siteSettings
-            })
-        });
-        
-        if (!response.ok) {
-            console.error('Failed to save website config to KV:', response.statusText);
-        }
-    } catch (error) {
-        console.error('Error saving website config to KV:', error);
+  const handleBkList = async () => {
+    setIsListing(true);
+    setListMsg('');
+    const result = await listKvBackups(authToken);
+    if (result.files) {
+        setBackupFiles(result.files);
+        if (result.files.length === 0) setListMsg('云端暂无备份，点击上方「立即备份」创建第一份');
+    } else {
+        setBackupFiles([]);
+        setListMsg(result.error || '获取备份列表失败。');
     }
+    setIsListing(false);
+  };
+
+  const handleBkRestore = async (file: KvBackupFile) => {
+    if (!authToken) {
+        setBkStatus('error');
+        setBkMsg('请先登录后再恢复备份。');
+        return;
+    }
+    const timeStr = new Date(file.createdAt).toLocaleString('zh-CN');
+    if (!confirm(`确定要恢复 ${timeStr} 的备份吗？这将覆盖当前的本地数据。`)) return;
+    setRestoringFile(file.id);
+    setBkStatus('busy');
+    setBkMsg('正在下载并恢复...');
+    const result = await downloadKvBackup(authToken, file.id);
+    if (result.data) {
+        const data = result.data;
+        onRestore(data.links, data.categories);
+        if (data.searchConfig) onRestoreSearchConfig(data.searchConfig);
+        if (data.aiConfig) onRestoreAIConfig(data.aiConfig);
+        setBkStatus('success');
+        setBkMsg('恢复成功！');
+    } else {
+        setBkStatus('error');
+        setBkMsg(result.error || '下载失败。');
+    }
+    setRestoringFile(null);
+  };
+
+  const handleBkDelete = async (file: KvBackupFile) => {
+    if (!authToken) return;
+    if (!confirm('确定要删除这份备份吗？删除后不可恢复。')) return;
+    setDeletingFile(file.id);
+    const err = await deleteKvBackup(authToken, file.id);
+    if (err) {
+        setBkStatus('error');
+        setBkMsg(err);
+    } else {
+        handleBkList();
+    }
+    setDeletingFile(null);
+  };
+
+  // 切到备份 tab 时自动加载云端备份列表
+  useEffect(() => {
+    if (isOpen && activeTab === 'backup') {
+        handleBkList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, activeTab]);
+
+  // ============ 备份恢复 tab ============
+  const handleSiteChange = (key: keyof SiteSettings, value: any) => {
+    setLocalSiteSettings(prev => ({ ...prev, [key]: value }));
+    // 注意：不再在每次按键时立即写 KV（高频写 + parseInt 兼空为 0 会导致误存“永不过期”），
+    // passwordExpiryDays 随设置弹窗保存（handleSave → onSave → App 同步 KV）一起提交
   };
 
   const handleSave = () => {
@@ -1054,6 +1125,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     { id: 'site', label: '网站设置', icon: LayoutTemplate },
     { id: 'wallpaper', label: '壁纸设置', icon: ImageIcon },
     { id: 'ai', label: 'AI 设置', icon: Bot },
+    { id: 'backup', label: '备份恢复', icon: DatabaseBackup },
     { id: 'tools', label: '扩展工具', icon: Wrench },
   ];
 
@@ -1431,6 +1503,114 @@ document.addEventListener('DOMContentLoaded', async () => {
                     </div>
                 )}
 
+                {activeTab === 'backup' && (
+                    <div className="space-y-6 animate-in fade-in duration-300">
+
+                        {/* ① 说明 */}
+                        <section className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <h4 className="font-medium text-slate-800 dark:text-slate-200">在线备份存储</h4>
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                                备份数据保存在 Cloudflare KV（站点同款存储），随部署自动可用，无需额外配置；需登录后使用，云端保留最近 20 份快照。
+                            </p>
+                        </section>
+
+                        <hr className="border-slate-200 dark:border-slate-700" />
+
+                        {/* ② 在线备份 */}
+                        <section className="space-y-4">
+                            <h4 className="font-medium text-slate-800 dark:text-slate-200">在线备份</h4>
+                            <div className="grid grid-cols-1 gap-4">
+                                <button 
+                                    onClick={() => handleBkUpload(true)}
+                                    disabled={bkStatus === 'busy'}
+                                    className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                                >
+                                    <CloudUpload className="w-8 h-8 text-blue-500 mb-2 group-hover:-translate-y-1 transition-transform" />
+                                    <span className="text-sm font-medium dark:text-white">立即备份</span>
+                                    <span className="text-xs text-slate-500 mt-1">生成带时间戳的独立快照，云端保留最近 20 份</span>
+                                </button>
+                            </div>
+                            {bkStatus !== 'idle' && (
+                                <div className={`text-sm text-center p-2 rounded ${
+                                    bkStatus === 'success' ? 'bg-green-50 text-green-600 dark:bg-green-900/20' : 
+                                    bkStatus === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-900/20' : 
+                                    'bg-blue-50 text-blue-600 dark:bg-blue-900/20'
+                                }`}>
+                                    {bkMsg}
+                                </div>
+                            )}
+                        </section>
+
+                        <hr className="border-slate-200 dark:border-slate-700" />
+
+                        {/* ③ 云端备份列表 */}
+                        <section className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h4 className="font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                                    <Cloud size={18} className="text-blue-500" /> 云端备份列表
+                                </h4>
+                                <button 
+                                    onClick={() => handleBkList()}
+                                    disabled={isListing}
+                                    className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-md transition-colors flex items-center gap-1 disabled:opacity-50"
+                                >
+                                    <RefreshCw size={12} className={isListing ? 'animate-spin' : ''} /> 刷新列表
+                                </button>
+                            </div>
+                            
+                            {isListing && (
+                                <div className="text-sm text-slate-500 text-center p-4">正在获取备份列表...</div>
+                            )}
+
+                            {!isListing && listMsg && backupFiles.length === 0 && (
+                                <div className="text-sm text-slate-500 text-center p-4 bg-slate-50 dark:bg-slate-700/30 rounded-lg">{listMsg}</div>
+                            )}
+
+                            {!isListing && backupFiles.length > 0 && (
+                                <div className="space-y-2">
+                                    {backupFiles.map((file, idx) => {
+                                        const d = file.createdAt ? new Date(file.createdAt) : null;
+                                        const timeStr = d && !isNaN(d.getTime()) ? d.toLocaleString('zh-CN') : '—';
+                                        const sizeStr = file.size > 0 ? `${(file.size / 1024).toFixed(1)} KB` : '—';
+                                        const countStr = `${file.links} 个站点 · ${file.categories} 个分类`;
+                                        return (
+                                            <div key={file.id} className="flex items-center justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-300 dark:hover:border-blue-600 transition-colors">
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-medium dark:text-white truncate flex items-center gap-2">
+                                                        {`备份 ${timeStr}`}
+                                                        {idx === 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300 shrink-0">最新</span>}
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 mt-0.5">{timeStr} · {sizeStr} · {countStr}</div>
+                                                </div>
+                                                <div className="ml-3 shrink-0 flex items-center gap-2">
+                                                    <button 
+                                                        onClick={() => handleBkRestore(file)}
+                                                        disabled={restoringFile !== null || deletingFile !== null}
+                                                        className="px-3 py-1.5 text-xs font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50 rounded-md transition-colors flex items-center gap-1 disabled:opacity-50"
+                                                    >
+                                                        {restoringFile === file.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                                                        {restoringFile === file.id ? '恢复中...' : '恢复'}
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleBkDelete(file)}
+                                                        disabled={restoringFile !== null || deletingFile !== null}
+                                                        className="px-2.5 py-1.5 text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 rounded-md transition-colors flex items-center gap-1 disabled:opacity-50"
+                                                    >
+                                                        {deletingFile === file.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </section>
+
+                    </div>
+                )}
+
                 {activeTab === 'tools' && (
                     <div className="space-y-8 animate-in fade-in duration-300">
                         
@@ -1523,6 +1703,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 </ol>
                                 
                                 <div className="mt-4 mb-4">
+                                    <div className="mb-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                                        <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                                        <span><strong>安全提示：</strong>打包文件内含站点访问密码明文（background.js / sidebar.js），请妥善保管、用后删除，切勿分享或上传到公共仓库。</span>
+                                    </div>
                                     <button 
                                         onClick={handleDownloadZip}
                                         disabled={isZipping}

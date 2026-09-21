@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
   Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
@@ -24,7 +24,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, WebDavConfig, AIConfig, SearchMode, ExternalSearchSource, SearchConfig } from './types';
+import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, AIConfig, SearchMode, ExternalSearchSource, SearchConfig } from './types';
 import { parseBookmarks } from './services/bookmarkParser';
 import { matchPinyinInitials } from './services/pinyinService';
 import Icon from './components/Icon';
@@ -46,9 +46,15 @@ const GITHUB_REPO_URL = 'https://github.com/aabacada/CloudNav-abcd';
 
 const LOCAL_STORAGE_KEY = 'cloudnav_data_cache';
 const AUTH_KEY = 'cloudnav_auth_token';
-const WEBDAV_CONFIG_KEY = 'cloudnav_webdav_config';
 const AI_CONFIG_KEY = 'cloudnav_ai_config';
-const SEARCH_CONFIG_KEY = 'cloudnav_search_config';
+
+// 安全提取 URL 域名：非法 URL 返回空串，避免渲染期 new URL() 抛异常导致整页白屏
+const safeHost = (url: string | undefined | null): string => {
+  try { return new URL(url || '').hostname; } catch { return ''; }
+};
+
+// 主列表分批渲染每批条数
+const PAGE_SIZE = 100;
 
 // 创建可排序的链接卡片组件（模块顶层定义，避免每次渲染重建组件导致全量重挂载）
 const SortableLinkCardBase = ({ link, cardStyle, sortingActive }: { link: LinkItem; cardStyle: 'detailed' | 'simple'; sortingActive: boolean }) => {
@@ -145,13 +151,8 @@ function App() {
   // Category Security State
   const [unlockedCategoryIds, setUnlockedCategoryIds] = useState<Set<string>>(new Set());
 
-  // WebDAV Config State
-  const [webDavConfig, setWebDavConfig] = useState<WebDavConfig>({
-      url: 'https://webdav.opendrive.com/',
-      username: '',
-      password: '',
-      enabled: false
-  });
+  // 分批渲染：主列表每批渲染条数，避免上千书签一次性全部渲染导致卡顿
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // AI Config State
   const [aiConfig, setAiConfig] = useState<AIConfig>(() => {
@@ -505,40 +506,35 @@ function App() {
       
       const iconResults = await Promise.all(iconPromises);
       
-      // 更新链接的图�?
+      // 更新链接的图标（不可变更新，避免直接改动 state 对象与并发 updateData 竞态）
+      const iconMap = new Map<string, string>();
       iconResults.forEach(result => {
-        if (result) {
-          const linkToUpdate = updatedLinks.find(link => {
-            if (!link.url) return false;
-            try {
-              let domain = link.url;
-              if (!link.url.startsWith('http://') && !link.url.startsWith('https://')) {
-                domain = 'https://' + link.url;
-              }
-              
-              if (domain.startsWith('http://') || domain.startsWith('https://')) {
-                const urlObj = new URL(domain);
-                return urlObj.hostname === result.domain;
-              }
-            } catch (e) {
-              return false;
-            }
-            return false;
-          });
-          
-          if (linkToUpdate) {
-            // 只有当链接没有图标，或者当前图标是 gstatic.cn 生成的，或者缓存中的图标是自定义图标时才更�?
-            if (!linkToUpdate.icon || 
-                linkToUpdate.icon.includes('gstatic.cn') || 
-                !result.icon.includes('gstatic.cn')) {
-              linkToUpdate.icon = result.icon;
-            }
-          }
-        }
+        if (result) iconMap.set(result.domain, result.icon);
       });
       
-      // 更新状�?
-      setLinks(updatedLinks);
+      let changed = false;
+      const merged = updatedLinks.map(link => {
+        if (!link.url) return link;
+        let domain = link.url;
+        try {
+          if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
+            domain = 'https://' + domain;
+          }
+          domain = new URL(domain).hostname;
+        } catch (e) {
+          return link;
+        }
+        const icon = iconMap.get(domain);
+        // 只有当链接没有图标，或者当前图标是 gstatic.cn 生成的，或者缓存中的图标是自定义图标时才更新
+        if (icon && (!link.icon || link.icon.includes('gstatic.cn') || !icon.includes('gstatic.cn'))) {
+          changed = true;
+          return { ...link, icon };
+        }
+        return link;
+      });
+      
+      // 更新状态
+      if (changed) setLinks(merged);
     }
   };
 
@@ -575,14 +571,6 @@ function App() {
       } else {
         setAuthToken(savedToken);
       }
-    }
-
-    // Load WebDAV Config
-    const savedWebDav = localStorage.getItem(WEBDAV_CONFIG_KEY);
-    if (savedWebDav) {
-        try {
-            setWebDavConfig(JSON.parse(savedWebDav));
-        } catch (e) {}
     }
 
     // Handle URL Params for Bookmarklet (Add Link)
@@ -626,7 +614,8 @@ function App() {
         let hasCloudData = false;
         try {
             const res = await fetch('/api/storage', {
-                headers: authToken ? { 'x-auth-password': authToken } : {}
+                // 用闭包内的 savedToken 而非 state authToken（setAuthToken 后 state 尚未更新，会带不上密码头导致 401）
+                headers: savedToken ? { 'x-auth-password': savedToken } : {}
             });
             if (res.ok) {
                 const data = await res.json();
@@ -935,26 +924,8 @@ function App() {
                 console.warn("Failed to fetch website config after login.", e);
             }
             
-            // 检查密码是否过�?
-            const lastLoginTime = localStorage.getItem('lastLoginTime');
-            const currentTime = Date.now();
-            
-            if (lastLoginTime) {
-                const lastLogin = parseInt(lastLoginTime);
-                const timeDiff = currentTime - lastLogin;
-                
-                const expiryTimeMs = (siteSettings.passwordExpiryDays || 7) > 0 ? (siteSettings.passwordExpiryDays || 7) * 24 * 60 * 60 * 1000 : 0;
-                
-                if (expiryTimeMs > 0 && timeDiff > expiryTimeMs) {
-                    setAuthToken('');
-                    localStorage.removeItem(AUTH_KEY);
-                    setIsAuthOpen(true);
-                    alert('您的密码已过期，请重新登录');
-                    return false;
-                }
-            }
-            
-            localStorage.setItem('lastLoginTime', currentTime.toString());
+            // 刚刚密码验证成功，直接刷新本地登录时间；过期控制由服务端 verifyAccess 负责
+            localStorage.setItem('lastLoginTime', Date.now().toString());
             
             // 登录成功后，从服务器获取数据
             try {
@@ -1247,10 +1218,10 @@ function App() {
           // 如果只有一个是置顶链接，置顶链接排在前�?
           if (a.pinned) return -1;
           if (b.pinned) return 1;
-          // 如果都不是置顶链接，保持原位置不变（按照order或createdAt排序�?
+          // 如果都不是置顶链接，保持原位置不变（按照order或createdAt升序，与全局排序约定一致）
           const aOrder = a.order !== undefined ? a.order : a.createdAt;
           const bOrder = b.order !== undefined ? b.order : b.createdAt;
-          return bOrder - aOrder;
+          return aOrder - bOrder;
         });
         
         updateData(updatedLinks, categories);
@@ -1506,12 +1477,6 @@ function App() {
       }
       
       updateData(newLinks, newCats);
-  };
-
-  // --- WebDAV Config ---
-  const handleSaveWebDavConfig = (config: WebDavConfig) => {
-      setWebDavConfig(config);
-      localStorage.setItem(WEBDAV_CONFIG_KEY, JSON.stringify(config));
   };
 
   // 搜索源选择弹出窗口状�?
@@ -1821,7 +1786,8 @@ function App() {
   };
 
   const handleRestoreSearchConfig = (restoredSearchConfig: SearchConfig) => {
-      handleSaveSearchConfig(restoredSearchConfig.externalSources, restoredSearchConfig.mode);
+      // 传入备份中的 selectedSource，避免回落到当前内存中的旧值
+      handleSaveSearchConfig(restoredSearchConfig.externalSources, restoredSearchConfig.mode, restoredSearchConfig.selectedSource ?? null);
   };
 
   // --- Filtering & Memo ---
@@ -1859,8 +1825,8 @@ function App() {
       });
   }, [links, categories, unlockedCategoryIds]);
 
-  // 全站搜索匹配（含标题/URL/描述/分类�?+ 拼音首字母）
-  const isLinkMatchSearch = (link: LinkItem, q: string): boolean => {
+  // 全站搜索匹配（含标题/URL/描述/分类名 + 拼音首字母）；用 useCallback 稳定引用，避免 useMemo 依赖每次渲染变化导致缓存失效
+  const isLinkMatchSearch = useCallback((link: LinkItem, q: string): boolean => {
     const matchText = (text?: string) => !!text && (
       text.toLowerCase().includes(q) || matchPinyinInitials(text, q)
     );
@@ -1871,7 +1837,12 @@ function App() {
       matchText(link.description) ||
       matchText(cat?.name)
     );
-  };
+  }, [categories]);
+
+  // 分类或搜索条件变化时重置分批渲染计数
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [selectedCategory, searchQuery]);
 
   const displayedLinks = useMemo(() => {
     let result = links;
@@ -2141,9 +2112,8 @@ function App() {
         links={links}
         categories={categories}
         onRestore={handleRestoreBackup}
-        webDavConfig={webDavConfig}
-        onSaveWebDavConfig={handleSaveWebDavConfig}
-        searchConfig={{ mode: searchMode, externalSources: externalSearchSources }}
+        authToken={authToken}
+        searchConfig={{ mode: searchMode, externalSources: externalSearchSources, selectedSource: selectedSearchSource }}
         onRestoreSearchConfig={handleRestoreSearchConfig}
         aiConfig={aiConfig}
         onRestoreAIConfig={handleRestoreAIConfig}
@@ -2170,6 +2140,11 @@ function App() {
         onUpdateLinks={(newLinks) => updateData(newLinks, categories)}
         authToken={authToken}
         onToggleRequireLogin={handleToggleRequireLogin}
+        searchConfig={{ mode: searchMode, externalSources: externalSearchSources, selectedSource: selectedSearchSource }}
+        aiConfig={aiConfig}
+        onRestore={handleRestoreBackup}
+        onRestoreSearchConfig={handleRestoreSearchConfig}
+        onRestoreAIConfig={handleRestoreAIConfig}
       />
 
       <SearchConfigModal
@@ -2486,7 +2461,7 @@ function App() {
                             className="px-2 py-2 text-sm rounded-md hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 flex items-center gap-1 justify-center"
                           >
                             <img 
-                              src={`https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=128&url=https://${new URL(source.url).hostname}`}
+                              src={`https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=128&url=https://${safeHost(source.url)}`}
                               alt={source.name}
                               className="w-4 h-4"
                               onError={(e) => {
@@ -2520,7 +2495,7 @@ function App() {
                     </svg>
                   ) : (hoveredSearchSource || selectedSearchSource) ? (
                     <img 
-                      src={`https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=128&url=https://${new URL((hoveredSearchSource || selectedSearchSource).url).hostname}`}
+                      src={`https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=128&url=https://${safeHost((hoveredSearchSource || selectedSearchSource)?.url)}`}
                       alt={(hoveredSearchSource || selectedSearchSource).name}
                       className="w-4 h-4"
                       onError={(e) => {
@@ -2946,13 +2921,25 @@ function App() {
                             </SortableContext>
                         </DndContext>
                     ) : (
+                        <>
                         <div className={`grid gap-3 ${
                           siteSettings.cardStyle === 'detailed' 
                             ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6' 
                             : 'grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8'
                         }`}>
-                            {displayedLinks.map(link => renderLinkCard(link))}
+                            {displayedLinks.slice(0, visibleCount).map(link => renderLinkCard(link))}
                         </div>
+                        {displayedLinks.length > visibleCount && (
+                            <div className="flex justify-center mt-6">
+                                <button 
+                                    onClick={() => setVisibleCount(c => c + PAGE_SIZE)}
+                                    className="px-6 py-2 text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 text-slate-600 dark:text-slate-300 rounded-full transition-colors"
+                                >
+                                    加载更多（已显示 {visibleCount} / {displayedLinks.length}）
+                                </button>
+                            </div>
+                        )}
+                        </>
                     )
                  )}
             </section>

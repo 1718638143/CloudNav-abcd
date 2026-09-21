@@ -302,7 +302,7 @@ const ImportModal: React.FC<ImportModalProps> = ({
                                 </div>
                                 <div className="text-center">
                                     <p className="text-sm font-medium dark:text-white">导入 cloudnav_backup.json 文件</p>
-                                    <p className="text-xs text-slate-500 mt-1">与 WebDAV 备份格式一致，便于数据迁移</p>
+                                    <p className="text-xs text-slate-500 mt-1">与在线备份格式一致，便于数据迁移</p>
                                 </div>
                             </>
                         )}

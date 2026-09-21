@@ -3,17 +3,27 @@ interface Env {
   PASSWORD: string;
 }
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
-  'Access-Control-Max-Age': '86400',
+// Origin 动态回显（仅同主机放行），不再使用 '*'
+const corsHeaders = (request: Request) => {
+  const origin = request.headers.get('Origin') || '';
+  let allow = '';
+  if (origin) {
+    try {
+      if (new URL(origin).host === (request.headers.get('Host') || new URL(request.url).host)) allow = origin;
+    } catch {}
+  }
+  return {
+    ...(allow ? { 'Access-Control-Allow-Origin': allow, 'Vary': 'Origin' } : {}),
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
+    'Access-Control-Max-Age': '86400',
+  };
 };
 
-export const onRequestOptions = async () => {
+export const onRequestOptions = async (context: { request: Request }) => {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders,
+    headers: corsHeaders(context.request),
   });
 };
 
@@ -25,7 +35,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
   if (!env.PASSWORD || providedPassword !== env.PASSWORD) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
 
@@ -34,21 +44,40 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     if (!url) {
       return new Response(JSON.stringify({ error: 'Missing url' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
 
-    // 仅允许 http/https，禁止其他协议
+    // 仅允许 http/https，禁止其他协议；同时拒绝内网/回环地址，防止被用作内网探测
     let target: URL;
     try {
       target = new URL(url);
       if (target.protocol !== 'http:' && target.protocol !== 'https:') {
         throw new Error('bad protocol');
       }
-    } catch {
+      const host = target.hostname.toLowerCase();
+      const isPrivateHost =
+        host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') ||
+        host === '0.0.0.0' || host === '[::]' || host === '::1' ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+        host.startsWith('[') && (/^\[::1\]$/.test(host) || /^\[f[cd]/i.test(host) || /^\[fe80/i.test(host));
+      if (isPrivateHost) {
+        throw new Error('private address');
+      }
+    } catch (e: any) {
+      if (e?.message === 'private address') {
+        return new Response(JSON.stringify({ error: '不允许探测内网/回环地址' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
+      }
       return new Response(JSON.stringify({ error: 'Invalid url' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
 
@@ -75,14 +104,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       else verdict = 'dead';
 
       return new Response(JSON.stringify({ status, verdict }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     } catch (e: any) {
       // 超时或网络层错误（DNS 失败/连接拒绝）
       const aborted = e?.name === 'AbortError';
       return new Response(
         JSON.stringify({ status: 0, verdict: 'dead', message: aborted ? 'timeout' : 'unreachable' }),
-        { headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+        { headers: { 'Content-Type': 'application/json', ...corsHeaders(request) } }
       );
     } finally {
       clearTimeout(timer);
@@ -90,7 +119,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
 };

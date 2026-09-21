@@ -45,13 +45,6 @@ export interface AppState {
   settings?: SiteSettings;
 }
 
-export interface WebDavConfig {
-  url: string;
-  username: string;
-  password: string;
-  enabled: boolean;
-}
-
 export type AIProvider = 'gemini' | 'openai';
 
 export interface AIConfig {

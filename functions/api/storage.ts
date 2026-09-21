@@ -3,11 +3,28 @@ interface Env {
   PASSWORD: string;
 }
 
-// 统一的响应头
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
+// 统一的响应头：Origin 动态回显请求来源（同源/自有站点才放行，不再使用 '*'）
+const getAllowedOrigin = (request: Request): string => {
+  const origin = request.headers.get('Origin') || '';
+  // 同源请求（浏览器一般不带 Origin）或无 Origin 的非浏览器客户端：不需要 CORS 头
+  if (!origin) return '';
+  try {
+    const originHost = new URL(origin).host;
+    const reqHost = request.headers.get('Host') || new URL(request.url).host;
+    // 仅放行与 API 同主机的来源
+    return originHost === reqHost ? origin : '';
+  } catch {
+    return '';
+  }
+};
+
+const corsHeaders = (request: Request) => {
+  const origin = getAllowedOrigin(request);
+  return {
+    ...(origin ? { 'Access-Control-Allow-Origin': origin, 'Vary': 'Origin' } : {}),
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
+  };
 };
 
 /** 读取访问验密开关，默认开启（未配置过时打开网站需要先输密码） */
@@ -28,7 +45,7 @@ const verifyAccess = async (env: Env, request: Request): Promise<Response | null
   if (!env.PASSWORD || providedPassword !== env.PASSWORD) {
     return new Response(JSON.stringify({ error: '密码错误' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
 
@@ -48,22 +65,22 @@ const verifyAccess = async (env: Env, request: Request): Promise<Response | null
       if (now - lastTime > expiryMs) {
         return new Response(JSON.stringify({ error: '密码已过期，请重新输入' }), {
           status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
     }
   }
 
-  // 更新最后认证时间
-  await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
+  // 注意：此处不写 last_auth_time——GET 请求高频，KV 同一 key 每秒仅允许 1 次写，
+  // 写入会触发 429 限流；过期时间刷新仅在登录/验密（POST authOnly）时进行
   return null;
 };
 
 // 处理 OPTIONS 请求（解决跨域预检）
-export const onRequestOptions = async () => {
+export const onRequestOptions = async (context: { request: Request }) => {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders,
+    headers: corsHeaders(context.request),
   });
 };
 
@@ -83,7 +100,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
         hasPassword: !!serverPassword,
         requiresAuth: !!serverPassword && requireLoginAccess
       }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -96,7 +113,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       }
       const aiConfig = await env.CLOUDNAV_KV.get('ai_config');
       return new Response(aiConfig || '{}', {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -104,7 +121,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     if (getConfig === 'search') {
       const searchConfig = await env.CLOUDNAV_KV.get('search_config');
       return new Response(searchConfig || '{}', {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -112,7 +129,40 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     if (getConfig === 'website') {
       const websiteConfig = await env.CLOUDNAV_KV.get('website_config');
       return new Response(websiteConfig || JSON.stringify({ passwordExpiryDays: 7 }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      });
+    }
+    
+    // 在线备份：列表 / 下载指定备份（含书签数据，需密码）
+    if (getConfig === 'backup') {
+      const errRes = await verifyAccess(env, request);
+      if (errRes) return errRes;
+      
+      const backupId = url.searchParams.get('id');
+      if (backupId) {
+        if (!/^cloudnav_backup_\d+_[a-z0-9]+$/.test(backupId)) {
+          return new Response(JSON.stringify({ error: 'Invalid backup id' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+          });
+        }
+        const data = await env.CLOUDNAV_KV.get(`backup:${backupId}`);
+        if (!data) {
+          return new Response(JSON.stringify({ error: '备份不存在或已被清理' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+          });
+        }
+        return new Response(data, {
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
+      }
+      
+      const indexStr = await env.CLOUDNAV_KV.get('backup_index');
+      let index: any[] = [];
+      try { index = indexStr ? JSON.parse(indexStr) : []; } catch (e) {}
+      return new Response(JSON.stringify({ success: true, files: index }), {
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -122,7 +172,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       if (!domain) {
         return new Response(JSON.stringify({ error: 'Domain parameter is required' }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
       
@@ -130,13 +180,13 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       const cachedIcon = await env.CLOUDNAV_KV.get(`favicon:${domain}`);
       if (cachedIcon) {
         return new Response(JSON.stringify({ icon: cachedIcon, cached: true }), {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
       
       // 如果没有缓存，返回空结果
       return new Response(JSON.stringify({ icon: null, cached: false }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -150,15 +200,13 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       const errRes = await verifyAccess(env, request);
       if (errRes) return errRes;
       verified = true;
-      
-      // 更新最后认证时间
-      await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
+      // 不在此处写 last_auth_time（GET 高频，避免 KV 写限流，见 verifyAccess 注释）
     }
     
     if (!data) {
       // 如果没有数据，返回空结构
       return new Response(JSON.stringify({ links: [], categories: [] }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
 
@@ -191,7 +239,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
           return rest;
         });
         return new Response(JSON.stringify(parsed), {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       } catch (e) {
         // JSON 解析失败时按原样返回
@@ -199,12 +247,12 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     }
 
     return new Response(data, {
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Failed to fetch data' }), {
       status: 500,
-      headers: corsHeaders,
+      headers: corsHeaders(context.request),
     });
   }
 };
@@ -225,14 +273,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       if (!serverPassword) {
         return new Response(JSON.stringify({ error: 'Server misconfigured: PASSWORD not set' }), { 
             status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
       
       if (providedPassword !== serverPassword) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
       
@@ -240,7 +288,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
       
       return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -251,14 +299,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         if (!providedPassword || providedPassword !== serverPassword) {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             status: 401,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
           });
         }
       }
       
       await env.CLOUDNAV_KV.put('search_config', JSON.stringify(body.config));
       return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -268,7 +316,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         if (!providedPassword || providedPassword !== serverPassword) {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             status: 401,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
           });
         }
       }
@@ -278,14 +326,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       if (!domainOk || !icon || typeof icon !== 'string' || icon.length > 8192) {
         return new Response(JSON.stringify({ error: 'Invalid domain or icon' }), {
           status: 400,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
       
       // 保存图标到KV，设置过期时间为30天
       await env.CLOUDNAV_KV.put(`favicon:${domain}`, icon, { expirationTtl: 30 * 24 * 60 * 60 });
       return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -294,13 +342,13 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       if (!providedPassword || providedPassword !== serverPassword) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
     } else {
       return new Response(JSON.stringify({ error: 'Server misconfigured: PASSWORD not set' }), { 
           status: 500,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -308,7 +356,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     if (body.saveConfig === 'ai') {
       await env.CLOUDNAV_KV.put('ai_config', JSON.stringify(body.config));
       return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -321,7 +369,58 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       const merged = { ...oldConfig, ...body.config };
       await env.CLOUDNAV_KV.put('website_config', JSON.stringify(merged));
       return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      });
+    }
+    
+    // 如果是保存在线备份（KV 存储快照）
+    if (body.saveConfig === 'backup') {
+      const backupData = body.data;
+      if (!backupData || !Array.isArray(backupData.links) || !Array.isArray(backupData.categories)) {
+        return new Response(JSON.stringify({ error: '备份数据结构不完整' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
+      }
+      const id = `cloudnav_backup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const size = JSON.stringify(backupData).length;
+      await env.CLOUDNAV_KV.put(`backup:${id}`, JSON.stringify(backupData));
+      
+      // 更新索引并保留最近 20 份
+      const indexStr = await env.CLOUDNAV_KV.get('backup_index');
+      let index: any[] = [];
+      try { index = indexStr ? JSON.parse(indexStr) : []; } catch (e) {}
+      index.unshift({ id, createdAt: Date.now(), size, links: backupData.links.length, categories: backupData.categories.length });
+      const keep = 20;
+      const removed = index.splice(keep);
+      await env.CLOUDNAV_KV.put('backup_index', JSON.stringify(index));
+      for (const item of removed) {
+        await env.CLOUDNAV_KV.delete(`backup:${item.id}`);
+      }
+      
+      return new Response(JSON.stringify({ success: true, id, total: index.length }), {
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      });
+    }
+    
+    // 删除指定备份
+    if (body.deleteBackup) {
+      const delId = String(body.deleteBackup);
+      // 防止误删非备份键
+      if (!/^cloudnav_backup_\d+_[a-z0-9]+$/.test(delId)) {
+        return new Response(JSON.stringify({ error: 'Invalid backup id' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
+      }
+      await env.CLOUDNAV_KV.delete(`backup:${delId}`);
+      const indexStr = await env.CLOUDNAV_KV.get('backup_index');
+      let index: any[] = [];
+      try { index = indexStr ? JSON.parse(indexStr) : []; } catch (e) {}
+      index = index.filter((i) => i.id !== delId);
+      await env.CLOUDNAV_KV.put('backup_index', JSON.stringify(index));
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
     
@@ -329,12 +428,12 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     await env.CLOUDNAV_KV.put('app_data', JSON.stringify(body));
 
     return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Failed to save data' }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
 };

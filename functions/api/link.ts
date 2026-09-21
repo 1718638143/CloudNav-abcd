@@ -4,17 +4,27 @@ interface Env {
   PASSWORD: string;
 }
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS, GET',
-  'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
-  'Access-Control-Max-Age': '86400',
+// Origin 动态回显（仅同主机放行），不再使用 '*'
+const corsHeaders = (request: Request) => {
+  const origin = request.headers.get('Origin') || '';
+  let allow = '';
+  if (origin) {
+    try {
+      if (new URL(origin).host === (request.headers.get('Host') || new URL(request.url).host)) allow = origin;
+    } catch {}
+  }
+  return {
+    ...(allow ? { 'Access-Control-Allow-Origin': allow, 'Vary': 'Origin' } : {}),
+    'Access-Control-Allow-Methods': 'POST, OPTIONS, GET',
+    'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
+    'Access-Control-Max-Age': '86400',
+  };
 };
 
-export const onRequestOptions = async () => {
+export const onRequestOptions = async (context: { request: Request }) => {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders,
+    headers: corsHeaders(context.request),
   });
 };
 
@@ -28,7 +38,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
   if (!serverPassword || providedPassword !== serverPassword) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
 
@@ -37,7 +47,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     
     // Validate input
     if (!newLinkData.title || !newLinkData.url) {
-        return new Response(JSON.stringify({ error: 'Missing title or url' }), { status: 400, headers: corsHeaders });
+        return new Response(JSON.stringify({ error: 'Missing title or url' }), { status: 400, headers: corsHeaders(request) });
     }
 
     // 2. Fetch current data from KV
@@ -115,13 +125,13 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         link: newLink,
         categoryName: targetCatName 
     }), {
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
 
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
 };

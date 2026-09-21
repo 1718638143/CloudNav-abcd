@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Cloud, Download, Upload, CheckCircle2, AlertCircle, RefreshCw, Save } from 'lucide-react';
-import { Category, LinkItem, WebDavConfig, SearchConfig, AIConfig } from '../types';
-import { checkWebDavConnection, uploadBackup, uploadBackupWithTimestamp, downloadBackup } from '../services/webDavService';
+import { X, Cloud, Download, Upload, CheckCircle2, AlertCircle, RefreshCw, Loader2, Trash2 } from 'lucide-react';
+import { Category, LinkItem, SearchConfig, AIConfig } from '../types';
+import { saveKvBackup, listKvBackups, downloadKvBackup, deleteKvBackup, KvBackupFile } from '../services/kvBackupService';
 import { generateBookmarkHtml, downloadHtmlFile } from '../services/exportService';
 
 interface BackupModalProps {
@@ -9,97 +9,100 @@ interface BackupModalProps {
   onClose: () => void;
   links: LinkItem[];
   categories: Category[];
+  authToken: string | null;
   onRestore: (links: LinkItem[], categories: Category[]) => void;
-  webDavConfig: WebDavConfig;
-  onSaveWebDavConfig: (config: WebDavConfig) => void;
   searchConfig: SearchConfig;
   onRestoreSearchConfig: (searchConfig: SearchConfig) => void;
   aiConfig: AIConfig;
   onRestoreAIConfig: (aiConfig: AIConfig) => void;
 }
 
-const BackupModal: React.FC<BackupModalProps> = ({ 
-  isOpen, onClose, links, categories, onRestore, webDavConfig, onSaveWebDavConfig, searchConfig, onRestoreSearchConfig, aiConfig, onRestoreAIConfig 
+const BackupModal: React.FC<BackupModalProps> = ({
+  isOpen, onClose, links, categories, authToken, onRestore, searchConfig, onRestoreSearchConfig, aiConfig, onRestoreAIConfig
 }) => {
-  const [config, setConfig] = useState<WebDavConfig>(webDavConfig);
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'uploading' | 'downloading' | 'success' | 'error'>('idle');
   const [statusMsg, setStatusMsg] = useState('');
+  const [backupFiles, setBackupFiles] = useState<KvBackupFile[]>([]);
+  const [isListing, setIsListing] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleList = async () => {
+    setIsListing(true);
+    const result = await listKvBackups(authToken);
+    setBackupFiles(result.files || []);
+    if (result.error) setStatusMsg(result.error);
+    setIsListing(false);
+  };
 
   useEffect(() => {
-    if(isOpen) {
-        setConfig(webDavConfig);
-        setTestResult(null);
+    if (isOpen) {
         setSyncStatus('idle');
+        setStatusMsg('');
+        handleList();
     }
-  }, [isOpen, webDavConfig]);
-
-  const handleTestConnection = async () => {
-    setIsTesting(true);
-    setTestResult(null);
-    const success = await checkWebDavConnection(config);
-    setTestResult(success ? 'success' : 'fail');
-    setIsTesting(false);
-  };
-
-  const handleSaveConfig = () => {
-    onSaveWebDavConfig(config);
-    // Automatically test upon save if enabled
-    if (config.enabled) {
-        handleTestConnection();
-    }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleBackupToCloud = async () => {
+    if (!authToken) {
+        setSyncStatus('error');
+        setStatusMsg('请先登录后再使用在线备份。');
+        return;
+    }
     setSyncStatus('uploading');
     setStatusMsg('正在上传...');
-    const success = await uploadBackup(config, { links, categories, searchConfig, aiConfig });
-    if (success) {
-        setSyncStatus('success');
-        setStatusMsg('备份成功！');
-    } else {
+    const result = await saveKvBackup(authToken, { links, categories, searchConfig, aiConfig });
+    if (result.success === false) {
         setSyncStatus('error');
-        setStatusMsg('上传失败，请检查配置或网络。');
+        setStatusMsg(result.error);
+        return;
     }
+    setSyncStatus('success');
+    setStatusMsg('备份成功！');
+    handleList();
   };
 
-  const handleBackupToCloudWithTimestamp = async () => {
-    setSyncStatus('uploading');
-    setStatusMsg('正在上传...');
-    const result = await uploadBackupWithTimestamp(config, { links, categories, searchConfig, aiConfig });
-    if (result.success) {
-        setSyncStatus('success');
-        setStatusMsg(`备份成功！文件名: ${result.filename}`);
-    } else {
+  const handleRestoreFromCloud = async (file: KvBackupFile) => {
+    if (!authToken) {
         setSyncStatus('error');
-        setStatusMsg('上传失败，请检查配置或网络。');
+        setStatusMsg('请先登录后再恢复备份。');
+        return;
     }
-  };
+    const timeStr = new Date(file.createdAt).toLocaleString('zh-CN');
+    if (!confirm(`确定要恢复 ${timeStr} 的备份吗？这将覆盖当前的本地数据。`)) return;
 
-  const handleRestoreFromCloud = async () => {
-    if (!confirm("确定要从 WebDAV 恢复吗？这将覆盖当前的本地数据。")) return;
-    
     setSyncStatus('downloading');
-    setStatusMsg('正在下载...');
-    const data = await downloadBackup(config);
-    
-    if (data) {
+    setStatusMsg('正在下载并恢复...');
+    setRestoringId(file.id);
+    const result = await downloadKvBackup(authToken, file.id);
+
+    if (result.data) {
+        const data = result.data;
         onRestore(data.links, data.categories);
-        // 恢复搜索配置（如果存在）
-        if (data.searchConfig) {
-            onRestoreSearchConfig(data.searchConfig);
-        }
-        // 恢复AI配置（如果存在）
-        if (data.aiConfig) {
-            onRestoreAIConfig(data.aiConfig);
-        }
+        if (data.searchConfig) onRestoreSearchConfig(data.searchConfig);
+        if (data.aiConfig) onRestoreAIConfig(data.aiConfig);
         setSyncStatus('success');
         setStatusMsg('恢复成功！');
     } else {
         setSyncStatus('error');
-        setStatusMsg('下载失败或文件格式错误。');
+        setStatusMsg(result.error || '下载失败或数据格式错误。');
     }
+    setRestoringId(null);
+  };
+
+  const handleDeleteBackup = async (file: KvBackupFile) => {
+    if (!authToken) return;
+    if (!confirm('确定要删除这份备份吗？删除后不可恢复。')) return;
+    setDeletingId(file.id);
+    const err = await deleteKvBackup(authToken, file.id);
+    if (err) {
+        setSyncStatus('error');
+        setStatusMsg(err);
+    } else {
+        handleList();
+    }
+    setDeletingId(null);
   };
 
   const handleExportHtml = () => {
@@ -137,117 +140,85 @@ const BackupModal: React.FC<BackupModalProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
-            
-            {/* Section 1: WebDAV Configuration */}
+
+            {/* Section 1: Online Backup (Cloudflare KV) */}
             <section className="space-y-4">
                 <div className="flex items-center justify-between">
-                    <h4 className="font-medium text-slate-800 dark:text-slate-200">
-                      WebDAV 设置 (OpenDrive <a href="https://www.opendrive.com/login" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 underline">登录</a>、<a href="https://www.opendrive.com/signup" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 underline">注册</a> / <a href="https://infini-cloud.net/en/modules/mypage/usage/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 underline">InfiniCloud</a>等)
+                    <h4 className="font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                        <Cloud size={18} className="text-blue-500" /> 云端备份 (KV 存储)
                     </h4>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input 
-                            type="checkbox" 
-                            checked={config.enabled}
-                            onChange={(e) => setConfig({...config, enabled: e.target.checked})}
-                            className="rounded text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="text-sm text-slate-600 dark:text-slate-400">启用 WebDAV</span>
-                    </label>
+                    <button
+                        onClick={handleList}
+                        disabled={isListing}
+                        className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-md transition-colors flex items-center gap-1 disabled:opacity-50"
+                    >
+                        <RefreshCw size={12} className={isListing ? 'animate-spin' : ''} /> 刷新
+                    </button>
                 </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                    备份保存在站点同款 Cloudflare KV 存储中，无需额外配置；需登录后使用，云端保留最近 20 份快照。
+                </p>
 
-                <div className={`space-y-3 transition-opacity ${!config.enabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                    <div>
-                        <label className="block text-xs font-medium text-slate-500 mb-1">服务器地址 (URL)</label>
-                        <input 
-                            type="text" 
-                            value={config.url}
-                            onChange={(e) => setConfig({...config, url: e.target.value})}
-                            placeholder="https://webdav.opendrive.com/"
-                            className="w-full p-2 text-sm rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">用户名</label>
-                            <input 
-                                type="text" 
-                                value={config.username}
-                                onChange={(e) => setConfig({...config, username: e.target.value})}
-                                className="w-full p-2 text-sm rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">应用密码</label>
-                            <input 
-                                type="password" 
-                                value={config.password}
-                                onChange={(e) => setConfig({...config, password: e.target.value})}
-                                className="w-full p-2 text-sm rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                        </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-3 pt-2">
-                        <button 
-                            onClick={handleTestConnection}
-                            disabled={isTesting}
-                            className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-md transition-colors"
-                        >
-                            {isTesting ? '连接中...' : '测试连接'}
-                        </button>
-                        <button 
-                            onClick={handleSaveConfig}
-                            className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-md transition-colors flex items-center gap-1"
-                        >
-                            <Save size={12} /> 保存配置
-                        </button>
-                        {testResult === 'success' && <span className="text-xs text-green-500 flex items-center gap-1"><CheckCircle2 size={12}/> 连接成功</span>}
-                        {testResult === 'fail' && <span className="text-xs text-red-500 flex items-center gap-1"><AlertCircle size={12}/> 连接失败</span>}
-                    </div>
-                </div>
-            </section>
-
-            <hr className="border-slate-200 dark:border-slate-700" />
-
-            {/* Section 2: Sync Actions */}
-            <section className="space-y-4">
-                <h4 className="font-medium text-slate-800 dark:text-slate-200">云端同步操作</h4>
-                <div className="grid grid-cols-3 gap-4">
-                    <button 
+                <div className="grid grid-cols-1 gap-4">
+                    <button
                         onClick={handleBackupToCloud}
-                        disabled={!config.enabled}
+                        disabled={syncStatus === 'uploading' || syncStatus === 'downloading'}
                         className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
                     >
                         <Upload className="w-8 h-8 text-blue-500 mb-2 group-hover:-translate-y-1 transition-transform" />
-                        <span className="text-sm font-medium dark:text-white">上传备份</span>
-                        <span className="text-xs text-slate-500 mt-1">覆盖云端数据</span>
-                    </button>
-
-                    <button 
-                        onClick={handleRestoreFromCloud}
-                        disabled={!config.enabled}
-                        className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
-                    >
-                        <Download className="w-8 h-8 text-purple-500 mb-2 group-hover:-translate-y-1 transition-transform" />
-                        <span className="text-sm font-medium dark:text-white">从 WebDAV 恢复</span>
-                        <span className="text-xs text-slate-500 mt-1">覆盖本地数据</span>
-                    </button>
-
-                    <button 
-                        onClick={handleBackupToCloudWithTimestamp}
-                        disabled={!config.enabled}
-                        className="flex flex-col items-center justify-center p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
-                    >
-                        <Upload className="w-8 h-8 text-green-500 mb-2 group-hover:-translate-y-1 transition-transform" />
-                        <span className="text-sm font-medium dark:text-white">双重备份</span>
-                        <span className="text-xs text-slate-500 mt-1">带时间戳</span>
+                        <span className="text-sm font-medium dark:text-white">立即备份</span>
+                        <span className="text-xs text-slate-500 mt-1">保存当前数据为一份新快照</span>
                     </button>
                 </div>
-                
+
+                <div className="space-y-2">
+                    {isListing && (
+                        <div className="text-sm text-slate-500 text-center p-4">正在获取备份列表...</div>
+                    )}
+                    {!isListing && backupFiles.length === 0 && (
+                        <div className="text-sm text-slate-500 text-center p-4 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                            云端暂无备份，点击上方「立即备份」创建第一份
+                        </div>
+                    )}
+                    {!isListing && backupFiles.map((file, idx) => {
+                        const d = file.createdAt ? new Date(file.createdAt) : null;
+                        const timeStr = d && !isNaN(d.getTime()) ? d.toLocaleString('zh-CN') : '—';
+                        const sizeStr = file.size > 0 ? `${(file.size / 1024).toFixed(1)} KB` : '—';
+                        return (
+                            <div key={file.id} className="flex items-center justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-300 dark:hover:border-blue-600 transition-colors">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-medium dark:text-white truncate flex items-center gap-2">
+                                        {`备份 ${timeStr}`}
+                                        {idx === 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300 shrink-0">最新</span>}
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-0.5">{timeStr} · {sizeStr} · {file.links} 个站点 · {file.categories} 个分类</div>
+                                </div>
+                                <div className="ml-3 shrink-0 flex items-center gap-2">
+                                    <button
+                                        onClick={() => handleRestoreFromCloud(file)}
+                                        disabled={restoringId !== null || deletingId !== null}
+                                        className="px-3 py-1.5 text-xs font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50 rounded-md transition-colors flex items-center gap-1 disabled:opacity-50"
+                                    >
+                                        {restoringId === file.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                                        {restoringId === file.id ? '恢复中...' : '恢复'}
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteBackup(file)}
+                                        disabled={restoringId !== null || deletingId !== null}
+                                        className="px-2.5 py-1.5 text-xs font-medium text-red-500 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 rounded-md transition-colors flex items-center gap-1 disabled:opacity-50"
+                                    >
+                                        {deletingId === file.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
                 {syncStatus !== 'idle' && (
                     <div className={`text-sm text-center p-2 rounded ${
-                        syncStatus === 'success' ? 'bg-green-50 text-green-600 dark:bg-green-900/20' : 
-                        syncStatus === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-900/20' : 
+                        syncStatus === 'success' ? 'bg-green-50 text-green-600 dark:bg-green-900/20' :
+                        syncStatus === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-900/20' :
                         'bg-blue-50 text-blue-600 dark:bg-blue-900/20'
                     }`}>
                         {statusMsg}
@@ -257,7 +228,7 @@ const BackupModal: React.FC<BackupModalProps> = ({
 
             <hr className="border-slate-200 dark:border-slate-700" />
 
-             {/* Section 3: HTML Export */}
+             {/* Section 2: Local Export */}
              <section className="space-y-4">
                 <h4 className="font-medium text-slate-800 dark:text-slate-200">本地导出</h4>
                 <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 flex items-center justify-between">
@@ -265,20 +236,20 @@ const BackupModal: React.FC<BackupModalProps> = ({
                         <h5 className="text-sm font-medium dark:text-slate-200">导出 HTML 书签文件</h5>
                         <p className="text-xs text-slate-500 mt-1">兼容 Chrome, Edge, Firefox 导入格式，保留目录结构</p>
                     </div>
-                    <button 
+                    <button
                         onClick={handleExportHtml}
                         className="px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:border-blue-500 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                     >
                         <Download size={16} /> 导出 HTML
                     </button>
                 </div>
-                
+
                 <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 flex items-center justify-between">
                     <div>
                         <h5 className="text-sm font-medium dark:text-slate-200">导出 cloudnav_backup.json 文件</h5>
-                        <p className="text-xs text-slate-500 mt-1">与 WebDAV 备份格式一致，便于数据迁移</p>
+                        <p className="text-xs text-slate-500 mt-1">与在线备份格式一致，便于数据迁移</p>
                     </div>
-                    <button 
+                    <button
                         onClick={handleExportJson}
                         className="px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:border-blue-500 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                     >

@@ -28,8 +28,23 @@ const SearchConfigModal: React.FC<SearchConfigModalProps> = ({
     }
   }, [sources, isOpen]);
 
+  // 校验搜索源 URL：必须合法且包含 {query} 占位符，否则渲染期 new URL() 会白屏、搜索会丢失关键词
+  const isValidSourceUrl = (url: string): boolean => {
+    if (!url.includes('{query}')) return false;
+    try {
+      const u = new URL(url.replace('{query}', 'test'));
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
   const handleAddSource = () => {
     if (!newSource.name || !newSource.url) return;
+    if (!isValidSourceUrl(newSource.url)) {
+      alert('URL 无效：必须是合法的 http/https 地址，且包含 {query} 占位符');
+      return;
+    }
     
     const source: ExternalSearchSource = {
       id: Date.now().toString(),
@@ -63,7 +78,12 @@ const SearchConfigModal: React.FC<SearchConfigModalProps> = ({
   };
 
   const handleSave = () => {
-    onSave(localSources);
+    // 保存前过滤掉无效的搜索源，避免坏数据进入 KV 后导致页面渲染崩溃
+    const valid = localSources.filter(s => isValidSourceUrl(s.url));
+    if (valid.length !== localSources.length) {
+      alert(`已自动移除 ${localSources.length - valid.length} 个无效搜索源（URL 非法或缺少 {query} 占位符）`);
+    }
+    onSave(valid);
     onClose();
   };
 
