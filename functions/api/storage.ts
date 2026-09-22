@@ -238,7 +238,9 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
           const { password, ...rest } = c;
           return rest;
         });
-        return new Response(JSON.stringify(parsed), {
+        // 打上脱敏标记：客户端据此识别“这是不完整的公开视图”，禁止把它回写到 app_data，
+        // 否则会把加密分类的密码字段抹掉、丢失受保护分类的链接
+        return new Response(JSON.stringify({ ...parsed, _sanitized: true }), {
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       } catch (e) {

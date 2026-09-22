@@ -56,6 +56,12 @@ const safeHost = (url: string | undefined | null): string => {
 // 主列表分批渲染每批条数
 const PAGE_SIZE = 100;
 
+// 判断一份数据是否是服务端脱敏视图（公开视图：加密分类密码被剥、其链接被过滤）。
+// 脱敏数据只可用于展示，绝不能回写 app_data，否则会把加密分类的密码抹掉、丢失受保护链接。
+const isSanitizedData = (data: any): boolean => {
+  return !!data && data._sanitized === true;
+};
+
 // 创建可排序的链接卡片组件（模块顶层定义，避免每次渲染重建组件导致全量重挂载）
 const SortableLinkCardBase = ({ link, cardStyle, sortingActive }: { link: LinkItem; cardStyle: 'detailed' | 'simple'; sortingActive: boolean }) => {
   const {
@@ -150,6 +156,8 @@ function App() {
   
   // Category Security State
   const [unlockedCategoryIds, setUnlockedCategoryIds] = useState<Set<string>>(new Set());
+  // 当前内存/本地缓存中的数据是否来自服务端脱敏视图（是则禁止回写云端）
+  const dataSanitizedRef = useRef(false);
 
   // 分批渲染：主列表每批渲染条数，避免上千书签一次性全部渲染导致卡顿
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -267,6 +275,8 @@ function App() {
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
+        // 本地缓存也带 _sanitized 标记，恢复其来源属性（退出登录后回到公开视图时保持禁止回写）
+        dataSanitizedRef.current = isSanitizedData(parsed);
         let loadedCategories = parsed.categories || DEFAULT_CATEGORIES;
         
         // 确保"常用推荐"分类始终存在，并确保它是第一个分�?
@@ -311,6 +321,12 @@ function App() {
   };
 
   const syncToCloud = async (newLinks: LinkItem[], newCategories: Category[], token: string) => {
+    // 硬闸门：当前数据来自脱敏视图时禁止任何回写，防止把公开视图数据覆盖到 app_data
+    if (dataSanitizedRef.current) {
+        console.warn('当前数据来自脱敏视图（未登录/公开视图），已禁止同步到云端');
+        setSyncStatus('error');
+        return false;
+    }
     setSyncStatus('saving');
     try {
         const response = await fetch('/api/storage', {
@@ -362,8 +378,11 @@ function App() {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links: newLinks, categories: newCategories }));
 
       // 3. Sync to Cloud (if authenticated)
-      if (authToken) {
+      if (authToken && !dataSanitizedRef.current) {
           syncToCloud(newLinks, newCategories, authToken);
+      } else if (authToken && dataSanitizedRef.current) {
+          // 内存数据来自脱敏视图（未登录时加载的公开数据），回写会抹掉加密分类的密码和受保护链接，禁止同步
+          console.warn('数据来自未登录的脱敏视图，已跳过云端同步，请先登录获取完整数据'); 
       }
   };
 
@@ -619,6 +638,8 @@ function App() {
             });
             if (res.ok) {
                 const data = await res.json();
+                // 记录数据来源：脱敏视图（未登录公开数据）不可回写云端
+                dataSanitizedRef.current = isSanitizedData(data);
                 if (data.links && data.links.length > 0) {
                     setLinks(data.links);
                     setCategories(data.categories || DEFAULT_CATEGORIES);
@@ -934,7 +955,8 @@ function App() {
                 });
                 if (res.ok) {
                     const data = await res.json();
-                    // 如果服务器有数据，使用服务器数据
+                    // 登录后拿到的是完整数据（带密码头验证通过），清除脱敏标记
+                    dataSanitizedRef.current = isSanitizedData(data);
                     if (data.links && data.links.length > 0) {
                         setLinks(data.links);
                         setCategories(data.categories || DEFAULT_CATEGORIES);
@@ -942,8 +964,9 @@ function App() {
                         
                         // 加载链接图标缓存
                         loadLinkIcons(data.links);
-                    } else {
-                        // 如果服务器没有数据，使用本地数据
+                    } else if (!dataSanitizedRef.current) {
+                        // 云端确实没有数据（全新的部署），才允许把本地数据推上去
+                        // 脱敏视图（_sanitized）也可能返回空 links，绝不能当作'云端无数据'触发回写
                         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links, categories }));
                         // 并将本地数据同步到服务器
                         syncToCloud(links, categories, password);
@@ -955,6 +978,7 @@ function App() {
             } catch (e) {
                 console.warn("Failed to fetch data after login.", e);
                 loadFromLocal();
+                // loadFromLocal 载入的本地缓存可能来自脱敏视图；syncToCloud 内部会依据 dataSanitizedRef 拦截
                 // 尝试将本地数据同步到服务�?
                 syncToCloud(links, categories, password);
             }
