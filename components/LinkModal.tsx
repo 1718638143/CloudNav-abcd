@@ -138,8 +138,8 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       pinned
     });
     
-    // 如果有自定义图标URL，缓存到KV空间
-    if (icon && !icon.includes('gstatic.cn')) {
+    // 如果有自定义图标URL，缓存到KV空间；base64 图标体积大且已随链接保存在 app_data 中，不再单独写 KV 键
+    if (icon && !icon.includes('gstatic.cn') && !icon.startsWith('data:')) {
       cacheCustomIcon(finalUrl, icon);
     }
     
@@ -223,10 +223,10 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       const iconUrl = `https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=128&url=https://${domain}`;
       setIcon(iconUrl);
       
-      // 将图标保存到KV缓存
+      // 将图标保存到KV缓存（base64 图标不单独写 KV，避免产生大量冗余键）
       try {
         const authToken = localStorage.getItem('cloudnav_auth_token');
-        if (authToken) {
+        if (authToken && !iconUrl.startsWith('data:')) {
           await fetch('/api/storage', {
             method: 'POST',
             headers: {

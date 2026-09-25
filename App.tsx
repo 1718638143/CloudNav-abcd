@@ -480,8 +480,9 @@ function App() {
   };
 
   // 加载链接图标缓存
-  const loadLinkIcons = async (linksToLoad: LinkItem[]) => {
-    if (!authToken) return; // 只有在已登录状态下才加载图标缓�?
+  // tokenOverride：刷新时 authToken state 尚未更新，由调用方传入闭包内的 savedToken，避免误判为未登录
+  const loadLinkIcons = async (linksToLoad: LinkItem[], tokenOverride?: string) => {
+    if (!(tokenOverride ?? authToken)) return; // 只有在已登录状态下才加载图标缓�?
     
     const updatedLinks = [...linksToLoad];
     const domainsToFetch: string[] = [];
@@ -645,8 +646,8 @@ function App() {
                     setCategories(data.categories || DEFAULT_CATEGORIES);
                     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
                     
-                    // 加载链接图标缓存
-                    loadLinkIcons(data.links);
+                    // 加载链接图标缓存（传入 savedToken：此时 authToken state 尚未更新）
+                    loadLinkIcons(data.links, savedToken);
                     hasCloudData = true;
                 }
             } else if (res.status === 401) {
