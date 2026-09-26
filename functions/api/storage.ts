@@ -344,14 +344,12 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     
     // 如果是保存搜索配置（允许无密码访问，因为搜索配置不包含敏感数据）
     if (body.saveConfig === 'search') {
-      // 如果服务器设置了密码，需要验证密码
-      if (serverPassword) {
-        if (!providedPassword || providedPassword !== serverPassword) {
-          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
-          });
-        }
+      // 登录后的请求头是签名令牌，不能再和明文密码做全等比较
+      if (serverPassword && !(await verifyToken(env, providedPassword, await getExpiryDays(env)))) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
       }
       
       await env.CLOUDNAV_KV.put('search_config', JSON.stringify(body.config));
@@ -360,15 +358,13 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 如果是保存图标（需密码校验，防止匿名滥用刷写 KV）
+    // 如果是保存图标（需令牌校验，防止匿名滥用刷写 KV）
     if (body.saveConfig === 'favicon') {
-      if (serverPassword) {
-        if (!providedPassword || providedPassword !== serverPassword) {
-          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
-          });
-        }
+      if (serverPassword && !(await verifyToken(env, providedPassword, await getExpiryDays(env)))) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
       }
       const { domain, icon } = body;
       // domain 仅允许合法主机名，icon 限制长度（防滥用写入）
@@ -387,9 +383,9 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 对于其他操作（保存AI配置、应用数据等），需要密码验证
+    // 保存 AI 配置、网站配置、书签数据：校验签名令牌，不再要求请求头等于明文密码
     if (serverPassword) {
-      if (!providedPassword || providedPassword !== serverPassword) {
+      if (!(await verifyToken(env, providedPassword, await getExpiryDays(env)))) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
