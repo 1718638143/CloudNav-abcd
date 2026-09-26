@@ -543,12 +543,12 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
             </section>
           )}
 
-          {/* 检测结果（弹性区域：占据剩余高度，内部统一滚动） */}
+          {/* 检测结果占据剩余高度，失效/待确认/可用都在同一个可滚动区域里 */}
           {rows.length > 0 && (
-            <section className="flex-1 min-h-0 flex flex-col">
+            <section className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-4 pr-1">
               {deadRows.length > 0 && (
                 <div>
-                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-red-500 mb-1 px-1">
+                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-red-500 mb-1 px-1 sticky top-0 bg-white dark:bg-slate-800 py-1">
                     <ShieldAlert size={14} /> 失效链接（{deadRows.length}）
                   </h4>
                   <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
@@ -558,7 +558,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
               )}
               {unknownRows.length > 0 && (
                 <div>
-                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-amber-500 mb-1 px-1">
+                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-amber-500 mb-1 px-1 sticky top-0 bg-white dark:bg-slate-800 py-1">
                     <ShieldCheck size={14} /> 待人工确认（{unknownRows.length}）
                   </h4>
                   <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
@@ -567,11 +567,11 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
                 </div>
               )}
               {stats.ok > 0 && (
-                <div className="flex flex-col min-h-0 flex-1">
-                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400 mb-1 px-1 shrink-0">
+                <div>
+                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400 mb-1 px-1 sticky top-0 bg-white dark:bg-slate-800 py-1">
                     <ShieldCheck size={14} /> 可用链接（{stats.ok}）
                   </h4>
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 overflow-y-auto">
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
                     {rows.filter(r => r.result.status === 'ok').map(renderRow)}
                   </div>
                 </div>
