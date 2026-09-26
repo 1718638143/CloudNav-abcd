@@ -55,10 +55,10 @@ export const parseBookmarks = async (file: File): Promise<ImportResult> => {
       const tagName = node.tagName.toUpperCase();
 
       if (tagName === 'DT') {
-        // DT can contain an H3 (Folder) or A (Link)
-        const h3 = node.querySelector('h3');
-        const a = node.querySelector('a');
-        const dl = node.querySelector('dl');
+        // 只用直接子节点，querySelector 会命中嵌套文件夹，把子层书签挂错分类
+        const h3 = Array.from(node.children).find(c => c.tagName.toUpperCase() === 'H3') || null;
+        const a = Array.from(node.children).find(c => c.tagName.toUpperCase() === 'A') || null;
+        const dl = Array.from(node.children).find(c => c.tagName.toUpperCase() === 'DL') || null;
 
         if (h3 && dl) {
             // It's a folder

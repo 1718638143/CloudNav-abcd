@@ -50,13 +50,16 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         return new Response(JSON.stringify({ error: 'Missing title or url' }), { status: 400, headers: corsHeaders(request) });
     }
 
-    // 2. Fetch current data from KV
-    const currentDataStr = await env.CLOUDNAV_KV.get('app_data');
-    let currentData = { links: [], categories: [] };
-    
-    if (currentDataStr) {
-        currentData = JSON.parse(currentDataStr);
-    }
+    const loadData = async () => {
+        const currentDataStr = await env.CLOUDNAV_KV.get('app_data');
+        const currentData = currentDataStr ? JSON.parse(currentDataStr) : { links: [], categories: [] };
+        if (!Array.isArray(currentData.links)) currentData.links = [];
+        if (!Array.isArray(currentData.categories)) currentData.categories = [];
+        return currentData;
+    };
+
+    // 2. 写入前重新读取，缩小与页面保存之间的覆盖窗口
+    let currentData = await loadData();
 
     // 3. Determine Category
     let targetCatId = '';
@@ -103,22 +106,24 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
 
     // 4. Create new link object
     const newLink = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         title: newLinkData.title,
         url: newLinkData.url,
         description: newLinkData.description || '',
         categoryId: targetCatId, 
         createdAt: Date.now(),
         pinned: false,
-        icon: undefined
+        icon: typeof newLinkData.icon === 'string' ? newLinkData.icon : undefined
     };
 
-    // 5. Append
-    // @ts-ignore
-    currentData.links = [newLink, ...(currentData.links || [])];
+    // 5. 落盘前再读一次并按 id 合并，避免覆盖刚刚由页面写入的链接
+    const fresh = await loadData();
+    const seen = new Set((fresh.links || []).map((l: any) => l.id));
+    fresh.links = seen.has(newLink.id) ? fresh.links : [newLink, ...fresh.links];
+    if (!fresh.categories.length && currentData.categories.length) fresh.categories = currentData.categories;
 
     // 6. Save back to KV
-    await env.CLOUDNAV_KV.put('app_data', JSON.stringify(currentData));
+    await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: fresh.links, categories: fresh.categories }));
 
     return new Response(JSON.stringify({ 
         success: true, 
@@ -129,7 +134,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     });
 
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: 'Failed to save link' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });

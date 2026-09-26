@@ -117,7 +117,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       clearTimeout(timer);
     }
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: 'Failed to check link' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });

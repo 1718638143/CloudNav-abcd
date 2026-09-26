@@ -56,9 +56,21 @@ const CategoryActionAuthModal: React.FC<CategoryActionAuthModalProps> = ({
   };
 
   const actionText = actionType === 'edit' ? '编辑' : '删除';
-  const colorClass = actionType === 'edit' 
-    ? 'amber' 
-    : 'red';
+  const tone = actionType === 'edit'
+    ? {
+        badge: 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+        ring: 'focus:ring-amber-500',
+        error: 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300',
+        icon: 'text-amber-600 dark:text-amber-400',
+        button: 'bg-amber-600 hover:bg-amber-700',
+      }
+    : {
+        badge: 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+        ring: 'focus:ring-red-500',
+        error: 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300',
+        icon: 'text-red-600 dark:text-red-400',
+        button: 'bg-red-600 hover:bg-red-700',
+      };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -68,7 +80,7 @@ const CategoryActionAuthModal: React.FC<CategoryActionAuthModalProps> = ({
         </button>
 
         <div className="flex flex-col items-center mb-6">
-          <div className={`w-14 h-14 bg-${colorClass}-100 dark:bg-${colorClass}-900/30 rounded-full flex items-center justify-center mb-4 text-${colorClass}-600 dark:text-${colorClass}-400`}>
+          <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-4 ${tone.badge}`}>
             <Lock size={28} />
           </div>
           <h2 className="text-lg font-bold dark:text-white">验证操作权限</h2>
@@ -89,7 +101,7 @@ const CategoryActionAuthModal: React.FC<CategoryActionAuthModalProps> = ({
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className={`w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white focus:ring-2 focus:ring-${colorClass}-500 outline-none transition-all text-center tracking-widest`}
+              className={`w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white focus:ring-2 ${tone.ring} outline-none transition-all text-center tracking-widest`}
               placeholder="请输入密码"
               autoFocus
               disabled={isVerifying}
@@ -97,9 +109,9 @@ const CategoryActionAuthModal: React.FC<CategoryActionAuthModalProps> = ({
           </div>
           
           {error && (
-            <div className={`p-2 bg-${colorClass}-50 dark:bg-${colorClass}-900/20 rounded-lg flex items-center gap-2`}>
-              <AlertCircle size={16} className={`text-${colorClass}-600 dark:text-${colorClass}-400`} />
-              <p className={`text-sm text-${colorClass}-700 dark:text-${colorClass}-300`}>{error}</p>
+            <div className={`p-2 rounded-lg flex items-center gap-2 ${tone.error}`}>
+              <AlertCircle size={16} className={tone.icon} />
+              <p className="text-sm">{error}</p>
             </div>
           )}
           
@@ -114,7 +126,7 @@ const CategoryActionAuthModal: React.FC<CategoryActionAuthModalProps> = ({
             </button>
             <button
               type="submit"
-              className={`flex-1 px-4 py-2.5 bg-${colorClass}-600 text-white rounded-xl hover:bg-${colorClass}-700 transition-colors font-medium disabled:opacity-50`}
+              className={`flex-1 px-4 py-2.5 text-white rounded-xl transition-colors font-medium disabled:opacity-50 ${tone.button}`}
               disabled={isVerifying}
             >
               {isVerifying ? '验证中...' : `确认${actionText}`}

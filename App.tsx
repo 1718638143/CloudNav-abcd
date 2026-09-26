@@ -215,6 +215,7 @@ function App() {
   // Sync State
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'offline'>('idle');
   const [authToken, setAuthToken] = useState<string>('');
+  useEffect(() => { authTokenRef.current = authToken; }, [authToken]);
   const [requiresAuth, setRequiresAuth] = useState<boolean | null>(null); // null表示未检查，true表示需要认证，false表示不需�?
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   
@@ -270,6 +271,11 @@ function App() {
   
   // --- Helpers & Sync Logic ---
 
+  // 始终以最新的 links/categories 为准，写请求串行执行，避免旧快照整包覆盖 KV
+  const dataRef = useRef<{ links: LinkItem[]; categories: Category[] }>({ links: [], categories: [] });
+  const syncQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const authTokenRef = useRef('');
+
   const loadFromLocal = () => {
     const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (stored) {
@@ -277,7 +283,8 @@ function App() {
         const parsed = JSON.parse(stored);
         // 本地缓存也带 _sanitized 标记，恢复其来源属性（退出登录后回到公开视图时保持禁止回写）
         dataSanitizedRef.current = isSanitizedData(parsed);
-        let loadedCategories = parsed.categories || DEFAULT_CATEGORIES;
+        // 空数组不能当成有效目录，否则一次错误回写会让侧边栏一直空白
+        let loadedCategories = parsed.categories?.length ? parsed.categories : DEFAULT_CATEGORIES;
         
         // 确保"常用推荐"分类始终存在，并确保它是第一个分�?
         if (!loadedCategories.some(c => c.id === 'common')) {
@@ -308,6 +315,7 @@ function App() {
           return link;
         });
         
+        dataRef.current = { links: loadedLinks, categories: loadedCategories };
         setLinks(loadedLinks);
         setCategories(loadedCategories);
       } catch (e) {
@@ -369,23 +377,40 @@ function App() {
     }
   };
 
-  const updateData = (newLinks: LinkItem[], newCategories: Category[]) => {
-      // 1. Optimistic UI Update
+  const updateData = (newLinks: LinkItem[], newCategories: Category[], options?: { forceFullData?: boolean }): Promise<boolean> => {
+      if (options?.forceFullData) dataSanitizedRef.current = false;
+      // 图标加载等异步回写可能带着尚未就绪的空分类，不能覆盖已经加载的目录
+      if (newCategories.length === 0 && dataRef.current.categories.length > 0) {
+          newCategories = dataRef.current.categories;
+      }
+      // 1. 先写入 ref，后续并发调用读到的都是最新快照
+      dataRef.current = { links: newLinks, categories: newCategories };
       setLinks(newLinks);
       setCategories(newCategories);
       
       // 2. Save to Local Cache
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links: newLinks, categories: newCategories }));
 
-      // 3. Sync to Cloud (if authenticated)
-      if (authToken && !dataSanitizedRef.current) {
-          syncToCloud(newLinks, newCategories, authToken);
-      } else if (authToken && dataSanitizedRef.current) {
-          // 内存数据来自脱敏视图（未登录时加载的公开数据），回写会抹掉加密分类的密码和受保护链接，禁止同步
-          console.warn('数据来自未登录的脱敏视图，已跳过云端同步，请先登录获取完整数据'); 
+      // 3. 串行同步：用 ref 中的最新令牌，避免登录刚完成时闭包里还是空令牌
+      const token = authTokenRef.current;
+      if (token && !dataSanitizedRef.current) {
+          const run = syncQueueRef.current.then(async () => {
+              const snapshot = dataRef.current;
+              const ok = await syncToCloud(snapshot.links, snapshot.categories, token);
+              if (!ok) alert('修改未保存到 KV，请重新登录后重试');
+              return ok;
+          });
+          syncQueueRef.current = run.catch(() => false);
+          return run;
       }
+      if (token && dataSanitizedRef.current) {
+          // 内存数据来自脱敏视图（未登录时加载的公开数据），回写会抹掉加密分类的密码和受保护链接，禁止同步
+          console.warn('数据来自未登录的脱敏视图，已跳过云端同步，请先登录获取完整数据');
+          alert('当前是未登录的公开数据，修改未保存到 KV，请先登录');
+          return Promise.resolve(false);
+      }
+      return Promise.resolve(false);
   };
-
   // --- Context Menu Functions ---
   const handleContextMenu = (event: React.MouseEvent, link: LinkItem) => {
     event.preventDefault();
@@ -553,8 +578,12 @@ function App() {
         return link;
       });
       
-      // 更新状态
-      if (changed) setLinks(merged);
+      // 只更新当前展示的图标，不在页面加载时回写整包数据。
+      // 登录状态下回写会和尚未就绪的空分类竞态，把侧边栏目录清空并同步到云端。
+      if (changed) {
+        dataRef.current = { ...dataRef.current, links: merged };
+        setLinks(merged);
+      }
     }
   };
 
@@ -578,7 +607,8 @@ function App() {
         const lastLogin = parseInt(lastLoginTime);
         const timeDiff = currentTime - lastLogin;
         
-        const expiryDays = siteSettings.passwordExpiryDays || 7;
+        // 0 是合法值（永不过期），不能用 || 回退成 7
+        const expiryDays = Number.isFinite(siteSettings.passwordExpiryDays) ? siteSettings.passwordExpiryDays : 7;
         const expiryTimeMs = expiryDays > 0 ? expiryDays * 24 * 60 * 60 * 1000 : 0;
         
         if (expiryTimeMs > 0 && timeDiff > expiryTimeMs) {
@@ -642,9 +672,13 @@ function App() {
                 // 记录数据来源：脱敏视图（未登录公开数据）不可回写云端
                 dataSanitizedRef.current = isSanitizedData(data);
                 if (data.links && data.links.length > 0) {
+                    const loadedCategories = data.categories?.length
+                      ? data.categories
+                      : (dataRef.current.categories.length ? dataRef.current.categories : DEFAULT_CATEGORIES);
+                    dataRef.current = { links: data.links, categories: loadedCategories };
                     setLinks(data.links);
-                    setCategories(data.categories || DEFAULT_CATEGORIES);
-                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+                    setCategories(loadedCategories);
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links: data.links, categories: loadedCategories }));
                     
                     // 加载链接图标缓存（传入 savedToken：此时 authToken state 尚未更新）
                     loadLinkIcons(data.links, savedToken);
@@ -666,6 +700,7 @@ function App() {
         }
         
         // 无论是否有云端数据，都尝试从KV空间加载搜索配置和网站配�?
+        let searchConfigLoaded = false;
         try {
             const searchConfigRes = await fetch('/api/storage?getConfig=search');
             if (searchConfigRes.ok) {
@@ -678,6 +713,7 @@ function App() {
                     if (searchConfigData.selectedSource) {
                         setSelectedSearchSource(searchConfigData.selectedSource);
                     }
+                    searchConfigLoaded = true;
                 }
             }
             
@@ -705,13 +741,21 @@ function App() {
         // 如果有云端数据，则不需要加载本地数�?
         if (hasCloudData) {
             setIsCheckingAuth(false);
+            setIsLoadingSearchConfig(false);
             return;
         }
         
         // 如果没有云端数据，则加载本地数据
         loadFromLocal();
+
+        // KV 已有搜索配置时绝不能再用内置列表覆盖
+        if (searchConfigLoaded) {
+            setIsLoadingSearchConfig(false);
+            setIsCheckingAuth(false);
+            return;
+        }
         
-        // 如果从KV空间加载搜索配置失败，直接使用默认配置（不使用localStorage回退�?
+        // 只有 KV 没有搜索配置时才写入内置默认源
         setSearchMode('external');
         setExternalSearchSources([
             {
@@ -919,8 +963,11 @@ function App() {
         });
         
         if (authResponse.ok) {
-            setAuthToken(password);
-            localStorage.setItem(AUTH_KEY, password);
+            const authData = await authResponse.json().catch(() => ({}));
+            // 服务端签发的签名令牌；旧服务未返回 token 时才退回明文密码
+            const sessionToken = authData.token || password;
+            setAuthToken(sessionToken);
+            localStorage.setItem(AUTH_KEY, sessionToken);
             setIsAuthOpen(false);
             setSyncStatus('saved');
             
@@ -952,28 +999,33 @@ function App() {
             // 登录成功后，从服务器获取数据
             try {
                 const res = await fetch('/api/storage', {
-                    headers: { 'x-auth-password': password }
+                    headers: { 'x-auth-password': sessionToken }
                 });
                 if (res.ok) {
                     const data = await res.json();
                     // 登录后拿到的是完整数据（带密码头验证通过），清除脱敏标记
                     dataSanitizedRef.current = isSanitizedData(data);
                     if (data.links && data.links.length > 0) {
+                        // 云端没带分类时保留当前已显示的目录，不能用空数组或默认分类把它清掉
+                        const loadedCategories = data.categories?.length
+                          ? data.categories
+                          : (dataRef.current.categories.length ? dataRef.current.categories : DEFAULT_CATEGORIES);
+                        dataRef.current = { links: data.links, categories: loadedCategories };
                         setLinks(data.links);
-                        setCategories(data.categories || DEFAULT_CATEGORIES);
-                        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+                        setCategories(loadedCategories);
+                        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links: data.links, categories: loadedCategories }));
                         
-                        // 加载链接图标缓存
-                        loadLinkIcons(data.links);
+                        // 加载链接图标缓存（此时 authToken state 尚未提交，必须传 sessionToken）
+                        loadLinkIcons(data.links, sessionToken);
                     } else if (!dataSanitizedRef.current) {
                         // 云端确实没有数据（全新的部署），才允许把本地数据推上去
                         // 脱敏视图（_sanitized）也可能返回空 links，绝不能当作'云端无数据'触发回写
                         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links, categories }));
                         // 并将本地数据同步到服务器
-                        syncToCloud(links, categories, password);
+                        syncToCloud(dataRef.current.links, dataRef.current.categories, sessionToken);
                         
-                        // 加载链接图标缓存
-                        loadLinkIcons(links);
+                        // 加载链接图标缓存（此时 authToken state 尚未提交，必须传 sessionToken）
+                        loadLinkIcons(dataRef.current.links, sessionToken);
                     }
                 } 
             } catch (e) {
@@ -981,12 +1033,14 @@ function App() {
                 loadFromLocal();
                 // loadFromLocal 载入的本地缓存可能来自脱敏视图；syncToCloud 内部会依据 dataSanitizedRef 拦截
                 // 尝试将本地数据同步到服务�?
-                syncToCloud(links, categories, password);
+                syncToCloud(dataRef.current.links, dataRef.current.categories, sessionToken);
             }
             
             // 登录成功后，从KV空间加载AI配置
             try {
-                const aiConfigRes = await fetch('/api/storage?getConfig=ai');
+                const aiConfigRes = await fetch('/api/storage?getConfig=ai', {
+                    headers: { 'x-auth-password': sessionToken }
+                });
                 if (aiConfigRes.ok) {
                     const aiConfigData = await aiConfigRes.json();
                     if (aiConfigData && Object.keys(aiConfigData).length > 0) {
@@ -1180,17 +1234,10 @@ function App() {
         // 重新排序当前分类的链�?
         const reorderedCategoryLinks = arrayMove(categoryLinks, activeIndex, overIndex);
         
-        // 更新所有链接的顺序
-        const updatedLinks = (links as LinkItem[]).map((link: LinkItem) => {
-          const reorderedIndex = (reorderedCategoryLinks as LinkItem[]).findIndex(l => l.id === link.id);
-          if (reorderedIndex !== -1) {
-            return { ...link, order: reorderedIndex };
-          }
-          return link;
-        });
-        
-        // 按照order字段重新排序
-        updatedLinks.sort((a, b) => (a.order || 0) - (b.order || 0));
+        // 只改本分类的 order，不按 order 重排全部链接，避免其他分类的卡片被挤到前面
+        const orderMap = new Map<string, number>();
+        (reorderedCategoryLinks as LinkItem[]).forEach((link, index) => orderMap.set(link.id, index));
+        const updatedLinks = links.map(link => orderMap.has(link.id) ? { ...link, order: orderMap.get(link.id) } : link);
         
         updateData(updatedLinks, categories);
       }
@@ -1529,7 +1576,7 @@ function App() {
       hideTimeoutRef.current = setTimeout(() => {
         setShowSearchSourcePopup(false);
         setHoveredSearchSource(null);
-      }, 100);
+      }, 300);
     }
     
     // 清理函数
@@ -1805,9 +1852,10 @@ function App() {
       }
   };
 
-  const handleRestoreBackup = (restoredLinks: LinkItem[], restoredCategories: Category[]) => {
-      updateData(restoredLinks, restoredCategories);
-      setIsBackupModalOpen(false);
+  const handleRestoreBackup = async (restoredLinks: LinkItem[], restoredCategories: Category[]): Promise<boolean> => {
+      const ok = await updateData(restoredLinks, restoredCategories, { forceFullData: true });
+      if (ok) setIsBackupModalOpen(false);
+      return ok;
   };
 
   const handleRestoreSearchConfig = (restoredSearchConfig: SearchConfig) => {
@@ -1908,9 +1956,13 @@ function App() {
     const q = searchQuery.toLowerCase();
     
     // 获取其他目录中匹配的链接
+    // 当前分类及其子分类已经在主列表里，不能再出现在“其他目录”
+    const visibleCategoryIds = new Set<string>([
+      selectedCategory,
+      ...categories.filter(c => c.parentId === selectedCategory).map(c => c.id)
+    ]);
     const otherLinks = links.filter(link => {
-      // 排除当前目录的链�?
-      if (link.categoryId === selectedCategory) {
+      if (visibleCategoryIds.has(link.categoryId)) {
         return false;
       }
       
@@ -2389,10 +2441,10 @@ function App() {
       </aside>
 
       {/* Main Content */}
-      <main className={`flex-1 flex flex-col h-full overflow-hidden relative z-10 ${siteSettings.wallpaper?.url ? '' : 'bg-slate-50 dark:bg-slate-900'}`}>
+      <main className={`flex-1 flex flex-col h-full overflow-hidden relative ${siteSettings.wallpaper?.url ? '' : 'bg-slate-50 dark:bg-slate-900'}`}>
         
         {/* Header */}
-        <header className="h-16 px-4 lg:px-8 flex items-center justify-between bg-white/80 dark:bg-slate-800/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-700 sticky top-0 z-10 shrink-0">
+        <header className="h-16 px-4 lg:px-8 flex items-center justify-between bg-white/80 dark:bg-slate-800/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shrink-0">
           <div className="flex items-center gap-4 flex-1">
             <button onClick={() => setSidebarOpen(true)} className="p-2 -ml-2 text-slate-600 dark:text-slate-300 lg:hidden">
               <Menu size={24} />
@@ -2470,10 +2522,11 @@ function App() {
                 {/* 搜索源选择弹出窗口 */}
                 {searchMode === 'external' && showSearchSourcePopup && (
                   <div 
-                    className="absolute left-0 top-full mt-2 w-full bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 p-3 z-50"
+                    className="absolute left-0 top-full w-full pt-2 z-[80]"
                     onMouseEnter={() => setIsPopupHovered(true)}
                     onMouseLeave={() => setIsPopupHovered(false)}
                   >
+                  <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 p-3">
                     <div className="grid grid-cols-5 sm:grid-cols-5 gap-2">
                       {externalSearchSources
                         .filter(source => source.enabled)
@@ -2498,6 +2551,7 @@ function App() {
                           </button>
                         ))}
                     </div>
+                  </div>
                   </div>
                 )}
                 

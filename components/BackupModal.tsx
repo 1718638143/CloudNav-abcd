@@ -10,7 +10,7 @@ interface BackupModalProps {
   links: LinkItem[];
   categories: Category[];
   authToken: string | null;
-  onRestore: (links: LinkItem[], categories: Category[]) => void;
+  onRestore: (links: LinkItem[], categories: Category[]) => Promise<boolean> | boolean;
   searchConfig: SearchConfig;
   onRestoreSearchConfig: (searchConfig: SearchConfig) => void;
   aiConfig: AIConfig;
@@ -79,7 +79,13 @@ const BackupModal: React.FC<BackupModalProps> = ({
 
     if (result.data) {
         const data = result.data;
-        onRestore(data.links, data.categories);
+        const ok = await onRestore(data.links, data.categories);
+        if (ok === false) {
+            setSyncStatus('error');
+            setStatusMsg('恢复未写入 KV，请重新登录后再试');
+            setRestoringId(null);
+            return;
+        }
         if (data.searchConfig) onRestoreSearchConfig(data.searchConfig);
         if (data.aiConfig) onRestoreAIConfig(data.aiConfig);
         setSyncStatus('success');

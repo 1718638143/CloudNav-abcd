@@ -18,7 +18,7 @@ interface SettingsModalProps {
   onToggleRequireLogin: (enabled: boolean) => void;
   searchConfig: SearchConfig;
   aiConfig: AIConfig;
-  onRestore: (links: LinkItem[], categories: Category[]) => void;
+  onRestore: (links: LinkItem[], categories: Category[]) => Promise<boolean> | boolean;
   onRestoreSearchConfig: (searchConfig: SearchConfig) => void;
   onRestoreAIConfig: (aiConfig: AIConfig) => void;
 }
@@ -157,7 +157,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       shouldStopRef.current = false;
       setDomain(window.location.origin);
       const storedToken = localStorage.getItem('cloudnav_auth_token');
-      if (storedToken) setPassword(storedToken);
+      // 不再把登录令牌填进扩展密码框：令牌不是部署密码，写进扩展等于泄露会话
     }
     // 仅在打开时同步一次，避免保存后重置其他 tab 的未保存修改
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,7 +215,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     const result = await downloadKvBackup(authToken, file.id);
     if (result.data) {
         const data = result.data;
-        onRestore(data.links, data.categories);
+        const ok = await onRestore(data.links, data.categories);
+        if (ok === false) {
+            setBkStatus('error');
+            setBkMsg('恢复未写入 KV，请重新登录后再试');
+            setRestoringFile(null);
+            return;
+        }
         if (data.searchConfig) onRestoreSearchConfig(data.searchConfig);
         if (data.aiConfig) onRestoreAIConfig(data.aiConfig);
         setBkStatus('success');
@@ -289,13 +295,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         try {
             const desc = await generateLinkDescription(link.title, link.url, localConfig);
             currentLinks = currentLinks.map(l => l.id === link.id ? { ...l, description: desc } : l);
-            onUpdateLinks(currentLinks);
             setProgress({ current: i + 1, total: missingLinks.length });
         } catch (e) {
             console.error(`Failed to generate for ${link.title}`, e);
         }
     }
 
+    // 批量生成期间只在本地累积，结束时保存一次，避免每条描述都整包写 KV
+    onUpdateLinks(currentLinks);
     setIsProcessing(false);
   };
 
@@ -364,9 +371,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const extBackgroundJs = `// background.js - CloudNav Assistant v7.6
 const CONFIG = {
-  apiBase: "${domain}",
-  password: "${password}"
+  apiBase: "${domain}"
 };
+
+// 密码只存放在浏览器本地，不写入扩展源码
+async function getPassword() {
+  const stored = await chrome.storage.local.get('cloudnav_password');
+  return stored.cloudnav_password || '';
+}
 
 let linkCache = [];
 let categoryCache = [];
@@ -530,8 +542,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 async function saveLink(title, url, categoryId, icon = '') {
-    if (!CONFIG.password) {
-        notify('保存失败', '未配置密码，请先在侧边栏登录。');
+    const password = await getPassword();
+    if (!password) {
+        notify('保存失败', '请先打开侧边栏输入访问密码。');
         return;
     }
 
@@ -547,7 +560,7 @@ async function saveLink(title, url, categoryId, icon = '') {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
-                'x-auth-password': CONFIG.password
+                'x-auth-password': password
             },
             body: JSON.stringify({
                 title: title || '未命名',
@@ -703,9 +716,19 @@ function notify(title, message) {
 </html>`;
 
   const extSidebarJs = `const CONFIG = {
-  apiBase: "${domain}",
-  password: "${password}"
+  apiBase: "${domain}"
 };
+
+async function getPassword() {
+  const stored = await chrome.storage.local.get('cloudnav_password');
+  return stored.cloudnav_password || '';
+}
+
+function askPassword() {
+  const entered = window.prompt('请输入 CloudNav 访问密码（仅保存在本机浏览器）');
+  if (!entered) return Promise.resolve('');
+  return chrome.storage.local.set({ cloudnav_password: entered }).then(() => entered);
+}
 const CACHE_KEY = 'cloudnav_data';
 
 let port = null;
@@ -971,10 +994,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             refreshBtn.classList.add('rotating');
             container.innerHTML = '<div class="loading">同步数据中...</div>';
             
+            let password = await getPassword();
+            if (!password) password = await askPassword();
+            if (!password) throw new Error('未输入访问密码');
+
             const res = await fetch(\`\${CONFIG.apiBase}/api/storage\`, {
-                headers: { 'x-auth-password': CONFIG.password }
+                headers: { 'x-auth-password': password }
             });
             
+            if (res.status === 401) {
+                await chrome.storage.local.remove('cloudnav_password');
+                throw new Error('密码错误，请点刷新重新输入');
+            }
             if (!res.ok) throw new Error("Sync failed");
             
             const data = await res.json();
@@ -1641,7 +1672,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                                 {copiedStates['pwd'] ? <Check size={16}/> : <Copy size={16}/>}
                                             </button>
                                         </div>
-                                        <p className="text-[10px] text-slate-400 mt-1">此密码对应您部署时设置的 PASSWORD 环境变量。</p>
+                                        <p className="text-[10px] text-slate-400 mt-1">扩展不再内置密码。下载安装后，打开侧边栏时会提示输入，密码只保存在浏览器本地。</p>
                                      </div>
                                 </div>
                             </div>

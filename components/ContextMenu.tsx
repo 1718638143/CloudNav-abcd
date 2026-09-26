@@ -56,8 +56,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
 
   // 确保菜单位置不会超出屏幕边界
   const adjustedPosition = {
-    x: Math.min(position.x, window.innerWidth - 200),
-    y: Math.min(position.y, window.innerHeight - 200)
+    x: Math.max(8, Math.min(position.x, window.innerWidth - 200)),
+    y: Math.max(8, Math.min(position.y, window.innerHeight - 200))
   };
 
   const menuItems = [

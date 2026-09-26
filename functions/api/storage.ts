@@ -1,6 +1,8 @@
 interface Env {
   CLOUDNAV_KV: any;
   PASSWORD: string;
+  /** 签发登录令牌的密钥；未配置时回退为 PASSWORD，不要求额外环境变量 */
+  AUTH_SECRET?: string;
 }
 
 // 统一的响应头：Origin 动态回显请求来源（同源/自有站点才放行，不再使用 '*'）
@@ -39,41 +41,77 @@ const getRequireLoginAccess = async (env: Env): Promise<boolean> => {
   return true;
 };
 
-/** 校验密码并检查是否过期，通过返回 null，失败返回错误 Response */
+const encoder = new TextEncoder();
+
+const getAuthSecret = (env: Env): string => env.AUTH_SECRET || env.PASSWORD || '';
+
+/** 签名登录令牌：`${issuedAt}.${hmac}`，过期由令牌自身决定，不再使用全局 last_auth_time */
+const signToken = async (env: Env, issuedAt: number): Promise<string> => {
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(getAuthSecret(env)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(String(issuedAt)));
+  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${issuedAt}.${hex}`;
+};
+
+const timingSafeEqual = (a: string, b: string): boolean => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+
+/** 0 表示永不过期；缺失或非数字才回退 7 天，不能用 `||` 把合法的 0 否掉 */
+const readExpiryDays = (config: any): number => {
+  const days = Number(config?.passwordExpiryDays);
+  return Number.isFinite(days) && days >= 0 ? days : 7;
+};
+
+const getExpiryDays = async (env: Env): Promise<number> => {
+  try {
+    const str = await env.CLOUDNAV_KV.get('website_config');
+    return readExpiryDays(str ? JSON.parse(str) : {});
+  } catch {
+    return 7;
+  }
+};
+
+/** 校验签名令牌是否本服务签发且未过期。旧版明文密码不再作为通行凭据。 */
+const verifyToken = async (env: Env, token: string | null, expiryDays: number): Promise<boolean> => {
+  if (!token || !getAuthSecret(env)) return false;
+  const dot = token.lastIndexOf('.');
+  if (dot <= 0) return false;
+  const issuedStr = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const issuedAt = Number(issuedStr);
+  if (!Number.isFinite(issuedAt) || issuedAt <= 0) return false;
+  const expected = await signToken(env, issuedAt);
+  if (!timingSafeEqual(token, expected)) return false;
+  if (expiryDays > 0 && Date.now() - issuedAt > expiryDays * 24 * 60 * 60 * 1000) return false;
+  return true;
+};
+
+const unauthorized = (request: Request, message: string) => new Response(JSON.stringify({ error: message }), {
+  status: 401,
+  headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+});
+
+/** 校验访问令牌，通过返回 null，失败返回错误 Response */
 const verifyAccess = async (env: Env, request: Request): Promise<Response | null> => {
-  const providedPassword = request.headers.get('x-auth-password');
-  if (!env.PASSWORD || providedPassword !== env.PASSWORD) {
-    return new Response(JSON.stringify({ error: '密码错误' }), {
-      status: 401,
+  if (!env.PASSWORD) {
+    return new Response(JSON.stringify({ error: 'Server misconfigured: PASSWORD not set' }), {
+      status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   }
-
-  // 检查密码是否过期
-  const websiteConfigStr = await env.CLOUDNAV_KV.get('website_config');
-  const websiteConfig = websiteConfigStr ? JSON.parse(websiteConfigStr) : { passwordExpiryDays: 7 };
-  const passwordExpiryDays = websiteConfig.passwordExpiryDays || 7;
-
-  if (passwordExpiryDays > 0) {
-    const lastAuthTime = await env.CLOUDNAV_KV.get('last_auth_time');
-    if (lastAuthTime) {
-      const lastTime = parseInt(lastAuthTime);
-      const now = Date.now();
-      const expiryMs = passwordExpiryDays * 24 * 60 * 60 * 1000;
-
-      // 如果已过期，返回错误
-      if (now - lastTime > expiryMs) {
-        return new Response(JSON.stringify({ error: '密码已过期，请重新输入' }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
-        });
-      }
-    }
-  }
-
-  // 注意：此处不写 last_auth_time——GET 请求高频，KV 同一 key 每秒仅允许 1 次写，
-  // 写入会触发 429 限流；过期时间刷新仅在登录/验密（POST authOnly）时进行
-  return null;
+  const token = request.headers.get('x-auth-password');
+  const expiryDays = await getExpiryDays(env);
+  const ok = await verifyToken(env, token, expiryDays);
+  if (ok) return null;
+  // 令牌格式正确但签名不匹配或超过有效期，统一提示重新登录
+  const looksLikeToken = !!token && token.includes('.');
+  return unauthorized(request, looksLikeToken ? '登录已过期，请重新输入' : '密码错误');
 };
 
 // 处理 OPTIONS 请求（解决跨域预检）
@@ -104,13 +142,10 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       });
     }
     
-    // 如果是获取配置请求
+    // AI 配置含 API Key，无论访问验密开关是否开启都必须验密
     if (getConfig === 'ai') {
-      // AI 配置含 API Key，访问验密开启时强制验密
-      if (await getRequireLoginAccess(env)) {
-        const errRes = await verifyAccess(env, request);
-        if (errRes) return errRes;
-      }
+      const errRes = await verifyAccess(env, request);
+      if (errRes) return errRes;
       const aiConfig = await env.CLOUDNAV_KV.get('ai_config');
       return new Response(aiConfig || '{}', {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -125,10 +160,23 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       });
     }
     
-    // 如果是获取网站配置请求
+    // 网站配置：公开字段任何人可读；passwordExpiryDays 只在登录后返回
     if (getConfig === 'website') {
-      const websiteConfig = await env.CLOUDNAV_KV.get('website_config');
-      return new Response(websiteConfig || JSON.stringify({ passwordExpiryDays: 7 }), {
+      const websiteConfigStr = await env.CLOUDNAV_KV.get('website_config');
+      let websiteConfig: any = {};
+      try { websiteConfig = websiteConfigStr ? JSON.parse(websiteConfigStr) : {}; } catch { websiteConfig = {}; }
+      const publicConfig = {
+        title: websiteConfig.title,
+        navTitle: websiteConfig.navTitle,
+        favicon: websiteConfig.favicon,
+        cardStyle: websiteConfig.cardStyle,
+        wallpaper: websiteConfig.wallpaper,
+        requireLoginAccess: websiteConfig.requireLoginAccess,
+      };
+      const expiryDays = await getExpiryDays(env);
+      const authed = await verifyToken(env, request.headers.get('x-auth-password'), expiryDays);
+      const body = authed ? { ...publicConfig, passwordExpiryDays: readExpiryDays(websiteConfig) } : publicConfig;
+      return new Response(JSON.stringify(body), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
@@ -193,14 +241,16 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     // 从 KV 中读取数据
     const data = await env.CLOUDNAV_KV.get('app_data');
     
-    // 如果是获取数据请求：访问验密开启时强制验密（保护网站数据不公开暴露）
+    // 获取数据：访问验密开启时强制验密（保护网站数据不公开暴露）
     const requireLoginAccess = await getRequireLoginAccess(env);
     let verified = false;
-    if (url.searchParams.get('getConfig') === 'true' || requireLoginAccess) {
+    if (requireLoginAccess) {
       const errRes = await verifyAccess(env, request);
       if (errRes) return errRes;
       verified = true;
-      // 不在此处写 last_auth_time（GET 高频，避免 KV 写限流，见 verifyAccess 注释）
+    } else {
+      // 关闭访问验密时仍识别有效令牌，以便已登录用户拿到完整数据而不是脱敏视图
+      verified = await verifyToken(env, request.headers.get('x-auth-password'), await getExpiryDays(env));
     }
     
     if (!data) {
@@ -270,7 +320,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
   try {
     const body = await request.json();
     
-    // 如果只是验证密码，不更新数据
+    // 只验证密码：通过后签发独立的签名令牌，不再写入全局 last_auth_time
     if (body.authOnly) {
       if (!serverPassword) {
         return new Response(JSON.stringify({ error: 'Server misconfigured: PASSWORD not set' }), { 
@@ -286,10 +336,8 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         });
       }
       
-      // 更新最后认证时间
-      await env.CLOUDNAV_KV.put('last_auth_time', Date.now().toString());
-      
-      return new Response(JSON.stringify({ success: true }), {
+      const token = await signToken(env, Date.now());
+      return new Response(JSON.stringify({ success: true, token }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
@@ -426,8 +474,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 将数据写入 KV
-    await env.CLOUDNAV_KV.put('app_data', JSON.stringify(body));
+    // 只接受完整的书签结构，拒绝 null / 缺字段覆盖全部数据
+    if (!Array.isArray(body.links) || !Array.isArray(body.categories)) {
+      return new Response(JSON.stringify({ error: 'Invalid payload' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      });
+    }
+    await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: body.links, categories: body.categories }));
 
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },

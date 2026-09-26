@@ -35,6 +35,10 @@ const BOUNDARY: number[] = [
 // 与 BOUNDARY 分段一一对应的字母（GB2312 一级字库无 I/O/U/V 开头的常用字）
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
+// 汉字 → 区位下标（模块加载时建一次，避免每次 indexOf 扫描 3755 字）
+const charIndex = new Map<string, number>();
+for (let i = 0; i < GB2312_LEVEL1.length; i++) charIndex.set(GB2312_LEVEL1[i], i);
+
 // 汉字 → 首字母缓存（初始化一次，之后 O(1) 查询）
 const initialCache = new Map<string, string>();
 
@@ -44,7 +48,7 @@ export function getInitial(char: string): string {
   if (cached !== undefined) return cached;
 
   let result: string;
-  const idx = GB2312_LEVEL1.indexOf(char);
+  const idx = charIndex.get(char) ?? -1;
   if (idx === -1) {
     result = char.toLowerCase();
   } else {
@@ -69,7 +73,7 @@ export function getInitials(text: string): string {
   let result = '';
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0;
-    if (GB2312_LEVEL1.indexOf(ch) !== -1) {
+    if (charIndex.has(ch)) {
       result += getInitial(ch);
     } else if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5A) || (code >= 0x61 && code <= 0x7A)) {
       result += ch.toLowerCase();
