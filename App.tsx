@@ -3,13 +3,13 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
   Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
-  Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save, CheckSquare, LogOut, ExternalLink, X, Activity, PanelLeftClose, PanelLeftOpen
+  Pin, Settings, Lock, CloudCog, Github, GitFork, GripVertical, Save,   CheckSquare, LogOut, ExternalLink, X, Activity, PanelLeftClose, PanelLeftOpen, Copy
 } from 'lucide-react';
 import {
   DndContext,
   DragEndEvent,
+  DragOverEvent,
   closestCenter,
-  closestCorners,
   PointerSensor,
   useSensor,
   useSensors,
@@ -77,23 +77,23 @@ const SortableLinkCardBase = ({ link, cardStyle, sortingActive }: { link: LinkIt
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition: isDragging ? 'none' : transition,
-    opacity: isDragging ? 0.5 : 1,
-    zIndex: isDragging ? 1000 : 'auto',
-  };
+    transition,
+    opacity: isDragging ? 0.85 : 1,
+    zIndex: isDragging ? 20 : 'auto',
+  } as React.CSSProperties;
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`group relative transition-all duration-200 cursor-grab active:cursor-grabbing min-w-0 max-w-full overflow-hidden hover:shadow-lg hover:shadow-green-100/50 dark:hover:shadow-green-900/20 ${
+      className={`group relative cursor-grab active:cursor-grabbing min-w-0 max-w-full overflow-hidden touch-none ${
         sortingActive
-          ? 'bg-green-100 dark:bg-green-900/30 border-green-200 dark:border-green-800'
+          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
           : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-      } ${isDragging ? 'shadow-2xl scale-105' : ''} ${
+      } ${isDragging ? 'shadow-lg' : ''} ${
         isDetailedView
-          ? 'flex flex-col rounded-2xl border shadow-sm p-4 min-h-[100px] hover:border-green-400 dark:hover:border-green-500'
-          : 'flex items-center rounded-xl border shadow-sm hover:border-green-300 dark:hover:border-green-600'
+          ? 'flex flex-col rounded-2xl border shadow-sm p-4 min-h-[100px]'
+          : 'flex items-center rounded-xl border shadow-sm p-3'
       }`}
       {...attributes}
       {...listeners}
@@ -935,6 +935,21 @@ function App() {
     setIsBatchEditMode(false);
   };
 
+  const handleBatchCopy = async () => {
+    const urls = displayedLinks.filter(link => selectedLinks.has(link.id)).map(link => link.url).filter(Boolean);
+    if (urls.length === 0) {
+      alert('请先选择要复制的网站');
+      return;
+    }
+    const text = urls.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      alert(`已复制 ${urls.length} 个网站链接`);
+    } catch {
+      window.prompt('复制失败，请手动复制以下链接', text);
+    }
+  };
+
   const handleSelectAll = () => {
     // 获取当前显示的所有链接ID
     const currentLinkIds = displayedLinks.map(link => link.id);
@@ -1211,37 +1226,43 @@ function App() {
     setEditingLink(undefined);
   };
 
-  // 拖拽结束事件处理函数
-  const handleDragEnd = (event: DragEndEvent) => {
+  // 排序开始前的快照：拖拽只改页面，点取消时按这份恢复
+  const sortSnapshotRef = useRef<LinkItem[] | null>(null);
+  // 排序期间直接使用这份画面顺序，避免每次拖动都重算过滤和排序
+  const [sortingItems, setSortingItems] = useState<LinkItem[] | null>(null);
+
+  const applyLocalOrder = (updatedLinks: LinkItem[]) => {
+    dataRef.current = { ...dataRef.current, links: updatedLinks };
+    setLinks(updatedLinks);
+  };
+
+  const moveItem = <T extends { id: string }>(items: T[], activeId: string, overId: string): T[] | null => {
+    const oldIndex = items.findIndex(item => item.id === activeId);
+    const newIndex = items.findIndex(item => item.id === overId);
+    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return null;
+    return arrayMove(items, oldIndex, newIndex);
+  };
+
+  // 拖动过程中就换位，松手时看到的顺序就是最终顺序
+  const handleDragOver = (event: DragOverEvent) => {
     const { active, over } = event;
-    if (!over) return;
-    const activeId = String(active.id);
-    const overId = String(over.id);
-    if (over && active.id !== over.id) {
-      // 获取当前分类下的所有链接（包括子分类）
-      const subCategoryIds = categories.filter(c => c.parentId === selectedCategory).map(c => c.id);
-      const categoryLinks = links.filter(link => 
-        selectedCategory === 'all' || 
-        link.categoryId === selectedCategory || 
-        subCategoryIds.includes(link.categoryId)
-      );
-      
-      // 找到被拖拽元素和目标元素的索�?
-      const activeIndex = categoryLinks.findIndex(link => link.id === activeId);
-      const overIndex = categoryLinks.findIndex(link => link.id === overId);
-      
-      if (activeIndex !== -1 && overIndex !== -1) {
-        // 重新排序当前分类的链�?
-        const reorderedCategoryLinks = arrayMove(categoryLinks, activeIndex, overIndex);
-        
-        // 只改本分类的 order，不按 order 重排全部链接，避免其他分类的卡片被挤到前面
-        const orderMap = new Map<string, number>();
-        (reorderedCategoryLinks as LinkItem[]).forEach((link, index) => orderMap.set(link.id, index));
-        const updatedLinks = links.map(link => orderMap.has(link.id) ? { ...link, order: orderMap.get(link.id) } : link);
-        
-        updateData(updatedLinks, categories);
-      }
-    }
+    if (!over || active.id === over.id) return;
+    setSortingItems(prev => {
+      if (!prev) return prev;
+      return moveItem(prev, String(active.id), String(over.id)) ?? prev;
+    });
+  };
+
+  const handleDragEnd = (_event: DragEndEvent) => {
+    // 顺序已在拖动过程中确定，这里只把画面顺序写回链接数据
+    setSortingItems(current => {
+      if (!current) return current;
+      const orderMap = new Map(current.map((link, index) => [link.id, index]));
+      applyLocalOrder(dataRef.current.links.map(link => (
+        orderMap.has(link.id) ? { ...link, order: orderMap.get(link.id) } : link
+      )));
+      return current;
+    });
   };
 
   // 置顶链接拖拽结束事件处理函数
@@ -1251,82 +1272,71 @@ function App() {
     const activeId = String(active.id);
     const overId = String(over.id);
 
-    if (activeId !== overId) {
-      // 获取所有置顶链�?
-      const pinnedLinksList = links.filter(link => link.pinned);
-      
-      // 找到被拖拽元素和目标元素的索�?
-      const activeIndex = pinnedLinksList.findIndex(link => link.id === activeId);
-      const overIndex = pinnedLinksList.findIndex(link => link.id === overId);
-      
-      if (activeIndex !== -1 && overIndex !== -1) {
-        // 重新排序置顶链接
-        const reorderedPinnedLinks = arrayMove(pinnedLinksList, activeIndex, overIndex);
-        
-        // 创建一个映射，存储每个置顶链接的新pinnedOrder
-        const pinnedOrderMap = new Map<string, number>();
-        (reorderedPinnedLinks as LinkItem[]).forEach((link, index) => {
-          pinnedOrderMap.set(link.id, index);
-        });
-        
-        // 只更新置顶链接的pinnedOrder，不改变任何链接的顺�?
-        const updatedLinks = links.map(link => {
-          if (link.pinned) {
-            return { 
-              ...link, 
-              pinnedOrder: pinnedOrderMap.get(link.id) 
-            };
-          }
-          return link;
-        });
-        
-        // 按照pinnedOrder重新排序整个链接数组，确保置顶链接的顺序正确
-        // 同时保持非置顶链接的相对顺序不变
-        updatedLinks.sort((a, b) => {
-          // 如果都是置顶链接，按照pinnedOrder排序
-          if (a.pinned && b.pinned) {
-            return (a.pinnedOrder || 0) - (b.pinnedOrder || 0);
-          }
-          // 如果只有一个是置顶链接，置顶链接排在前�?
-          if (a.pinned) return -1;
-          if (b.pinned) return 1;
-          // 如果都不是置顶链接，保持原位置不变（按照order或createdAt升序，与全局排序约定一致）
-          const aOrder = a.order !== undefined ? a.order : a.createdAt;
-          const bOrder = b.order !== undefined ? b.order : b.createdAt;
-          return aOrder - bOrder;
-        });
-        
-        updateData(updatedLinks, categories);
-      }
-    }
+    if (activeId === overId) return;
+    setSortingItems(prev => {
+      if (!prev) return prev;
+      return moveItem(prev, activeId, overId) ?? prev;
+    });
   };
 
-  // 开始排�?
+  const commitPinnedOrder = () => {
+    setSortingItems(current => {
+      if (!current) return current;
+      const pinnedOrderMap = new Map(current.map((link, index) => [link.id, index]));
+      applyLocalOrder(dataRef.current.links.map(link => (
+        pinnedOrderMap.has(link.id) ? { ...link, pinnedOrder: pinnedOrderMap.get(link.id) } : link
+      )));
+      return current;
+    });
+  };
+
+  const rememberSortSnapshot = () => {
+    sortSnapshotRef.current = dataRef.current.links.map(link => ({ ...link }));
+  };
+
+  const restoreSortSnapshot = () => {
+    const restored = sortSnapshotRef.current;
+    sortSnapshotRef.current = null;
+    if (!restored) return;
+    dataRef.current = { ...dataRef.current, links: restored };
+    setLinks(restored);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ links: restored, categories: dataRef.current.categories }));
+  };
+
+  // 开始排序
   const startSorting = (categoryId: string) => {
+    rememberSortSnapshot();
+    setSortingItems(displayedLinks.map(link => ({ ...link })));
     setIsSortingMode(categoryId);
   };
 
   // 保存排序
   const saveSorting = () => {
-    // 在保存排序时，确保将当前排序后的数据保存到服务器和本地存�?
-    updateData(links, categories);
+    sortSnapshotRef.current = null;
+    setSortingItems(null);
+    updateData(dataRef.current.links, dataRef.current.categories);
     setIsSortingMode(null);
   };
 
-  // 取消排序
+  // 取消排序：恢复进入排序前的顺序
   const cancelSorting = () => {
+    setSortingItems(null);
+    restoreSortSnapshot();
     setIsSortingMode(null);
   };
 
   // 保存置顶链接排序
   const savePinnedSorting = () => {
-    // 在保存排序时，确保将当前排序后的数据保存到服务器和本地存�?
-    updateData(links, categories);
+    sortSnapshotRef.current = null;
+    setSortingItems(null);
+    updateData(dataRef.current.links, dataRef.current.categories);
     setIsSortingPinned(false);
   };
 
   // 取消置顶链接排序
   const cancelPinnedSorting = () => {
+    setSortingItems(null);
+    restoreSortSnapshot();
     setIsSortingPinned(false);
   };
 
@@ -1334,7 +1344,7 @@ function App() {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8, // 需要拖�?px才开始拖拽，避免误触
+        distance: 4,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -2726,7 +2736,7 @@ function App() {
                             </div>
                         ) : (
                             <button 
-                                onClick={() => setIsSortingPinned(true)}
+                                onClick={() => { rememberSortSnapshot(); setSortingItems(pinnedLinks.map(link => ({ ...link }))); setIsSortingPinned(true); }}
                                 className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-full transition-colors"
                                 title="排序"
                             >
@@ -2738,11 +2748,13 @@ function App() {
                     {isSortingPinned ? (
                         <DndContext
                             sensors={sensors}
-                            collisionDetection={closestCorners}
-                            onDragEnd={handlePinnedDragEnd}
+                            collisionDetection={closestCenter}
+                            autoScroll={{ threshold: { x: 0.15, y: 0.15 }, acceleration: 12 }}
+                            onDragOver={handlePinnedDragEnd}
+                            onDragEnd={commitPinnedOrder}
                         >
                             <SortableContext
-                                items={pinnedLinks.map(link => link.id)}
+                                items={(sortingItems ?? pinnedLinks).map(link => link.id)}
                                 strategy={rectSortingStrategy}
                             >
                                 <div className={`grid gap-3 ${
@@ -2750,7 +2762,7 @@ function App() {
                                     ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6' 
                                     : 'grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8'
                                 }`}>
-                                    {pinnedLinks.map(link => (
+                                    {(sortingItems ?? pinnedLinks).map(link => (
                                         <SortableLinkCardBase key={link.id} link={link} cardStyle={siteSettings.cardStyle} sortingActive={!!isSortingMode || isSortingPinned} />
                                     ))}
                                 </div>
@@ -2943,6 +2955,14 @@ function App() {
                                                   })()}
                                               </div>
                                           </div>
+                                          <button
+                                              onClick={handleBatchCopy}
+                                              className="flex items-center gap-1 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 text-white text-xs font-medium rounded-full transition-colors"
+                                              title="复制选中网站的链接"
+                                          >
+                                              <Copy size={14} />
+                                              <span>批量复制</span>
+                                          </button>
                                      </>
                                  ) : (
                                      <button 
@@ -2981,11 +3001,13 @@ function App() {
                     isSortingMode === selectedCategory ? (
                         <DndContext
                             sensors={sensors}
-                            collisionDetection={closestCorners}
+                            collisionDetection={closestCenter}
+                            autoScroll={{ threshold: { x: 0.15, y: 0.15 }, acceleration: 12 }}
+                            onDragOver={handleDragOver}
                             onDragEnd={handleDragEnd}
                         >
                             <SortableContext
-                                items={displayedLinks.map(link => link.id)}
+                                items={(sortingItems ?? displayedLinks).map(link => link.id)}
                                 strategy={rectSortingStrategy}
                             >
                                 <div className={`grid gap-3 ${
@@ -2993,7 +3015,7 @@ function App() {
                                     ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6' 
                                     : 'grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8'
                                 }`}>
-                                    {displayedLinks.map(link => (
+                                    {(sortingItems ?? displayedLinks).map(link => (
                                         <SortableLinkCardBase key={link.id} link={link} cardStyle={siteSettings.cardStyle} sortingActive={!!isSortingMode || isSortingPinned} />
                                     ))}
                                 </div>
