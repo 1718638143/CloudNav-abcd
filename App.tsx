@@ -8,7 +8,6 @@ import {
 import {
   DndContext,
   DragEndEvent,
-  DragOverEvent,
   closestCenter,
   PointerSensor,
   useSensor,
@@ -1243,50 +1242,35 @@ function App() {
     return arrayMove(items, oldIndex, newIndex);
   };
 
-  // 拖动过程中就换位，松手时看到的顺序就是最终顺序
-  const handleDragOver = (event: DragOverEvent) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    setSortingItems(prev => {
-      if (!prev) return prev;
-      return moveItem(prev, String(active.id), String(over.id)) ?? prev;
-    });
-  };
+    if (!over) return;
 
-  const handleDragEnd = (_event: DragEndEvent) => {
-    // 顺序已在拖动过程中确定，这里只把画面顺序写回链接数据
     setSortingItems(current => {
       if (!current) return current;
-      const orderMap = new Map(current.map((link, index) => [link.id, index]));
+
+      const reordered = moveItem(current, String(active.id), String(over.id)) ?? current;
+      const orderMap = new Map(reordered.map((link, index) => [link.id, index]));
       applyLocalOrder(dataRef.current.links.map(link => (
         orderMap.has(link.id) ? { ...link, order: orderMap.get(link.id) } : link
       )));
-      return current;
+      return reordered;
     });
   };
 
-  // 置顶链接拖拽结束事件处理函数
   const handlePinnedDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
-    const activeId = String(active.id);
-    const overId = String(over.id);
 
-    if (activeId === overId) return;
-    setSortingItems(prev => {
-      if (!prev) return prev;
-      return moveItem(prev, activeId, overId) ?? prev;
-    });
-  };
-
-  const commitPinnedOrder = () => {
     setSortingItems(current => {
       if (!current) return current;
-      const pinnedOrderMap = new Map(current.map((link, index) => [link.id, index]));
+
+      const reordered = moveItem(current, String(active.id), String(over.id)) ?? current;
+      const pinnedOrderMap = new Map(reordered.map((link, index) => [link.id, index]));
       applyLocalOrder(dataRef.current.links.map(link => (
         pinnedOrderMap.has(link.id) ? { ...link, pinnedOrder: pinnedOrderMap.get(link.id) } : link
       )));
-      return current;
+      return reordered;
     });
   };
 
@@ -2750,8 +2734,7 @@ function App() {
                             sensors={sensors}
                             collisionDetection={closestCenter}
                             autoScroll={{ threshold: { x: 0.15, y: 0.15 }, acceleration: 12 }}
-                            onDragOver={handlePinnedDragEnd}
-                            onDragEnd={commitPinnedOrder}
+                            onDragEnd={handlePinnedDragEnd}
                         >
                             <SortableContext
                                 items={(sortingItems ?? pinnedLinks).map(link => link.id)}
@@ -3003,7 +2986,6 @@ function App() {
                             sensors={sensors}
                             collisionDetection={closestCenter}
                             autoScroll={{ threshold: { x: 0.15, y: 0.15 }, acceleration: 12 }}
-                            onDragOver={handleDragOver}
                             onDragEnd={handleDragEnd}
                         >
                             <SortableContext
