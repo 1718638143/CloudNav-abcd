@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, Edit2, Check, Globe, Search, ExternalLink, RotateCcw } from 'lucide-react';
 import { ExternalSearchSource, SearchMode } from '../types';
+import { isSafeSearchSourceUrl } from '../services/urlSafety';
 
 interface SearchConfigModalProps {
   isOpen: boolean;
@@ -28,16 +29,8 @@ const SearchConfigModal: React.FC<SearchConfigModalProps> = ({
     }
   }, [sources, isOpen]);
 
-  // 校验搜索源 URL：必须合法且包含 {query} 占位符，否则渲染期 new URL() 会白屏、搜索会丢失关键词
-  const isValidSourceUrl = (url: string): boolean => {
-    if (!url.includes('{query}')) return false;
-    try {
-      const u = new URL(url.replace('{query}', 'test'));
-      return u.protocol === 'http:' || u.protocol === 'https:';
-    } catch {
-      return false;
-    }
-  };
+  // 复用共享安全规则，确保 UI、备份导入和 KV 加载采用相同的 URL 校验。
+  const isValidSourceUrl = (url: string): boolean => isSafeSearchSourceUrl(url);
 
   const handleAddSource = () => {
     if (!newSource.name || !newSource.url) return;

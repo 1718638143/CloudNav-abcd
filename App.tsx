@@ -26,6 +26,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, AIConfig, SearchMode, ExternalSearchSource, SearchConfig } from './types';
 import { parseBookmarks } from './services/bookmarkParser';
 import { matchPinyinInitials } from './services/pinyinService';
+import { isSafeSearchSource, sanitizeSearchConfig } from './services/urlSafety';
 import Icon from './components/Icon';
 import LinkModal from './components/LinkModal';
 import AuthModal from './components/AuthModal';
@@ -704,14 +705,11 @@ function App() {
             const searchConfigRes = await fetch('/api/storage?getConfig=search');
             if (searchConfigRes.ok) {
                 const searchConfigData = await searchConfigRes.json();
-                // 检查搜索配置是否有效（包含必要的字段）
-                if (searchConfigData && (searchConfigData.mode || searchConfigData.externalSources || searchConfigData.selectedSource)) {
-                    setSearchMode(searchConfigData.mode || 'external');
-                    setExternalSearchSources(searchConfigData.externalSources || []);
-                    // 加载已保存的选中搜索�?
-                    if (searchConfigData.selectedSource) {
-                        setSelectedSearchSource(searchConfigData.selectedSource);
-                    }
+                const safeSearchConfig = sanitizeSearchConfig(searchConfigData);
+                if (safeSearchConfig) {
+                    setSearchMode(safeSearchConfig.mode);
+                    setExternalSearchSources(safeSearchConfig.externalSources);
+                    setSelectedSearchSource(safeSearchConfig.selectedSource ?? null);
                     searchConfigLoaded = true;
                 }
             }
@@ -1583,6 +1581,8 @@ function App() {
 
   // 处理搜索源选择
   const handleSearchSourceSelect = async (source: ExternalSearchSource) => {
+    if (!isSafeSearchSource(source)) return;
+
     // 更新选中的搜索源
     setSelectedSearchSource(source);
     
@@ -1591,7 +1591,7 @@ function App() {
     
     if (searchQuery.trim()) {
       const searchUrl = source.url.replace('{query}', encodeURIComponent(searchQuery));
-      window.open(searchUrl, '_blank');
+      window.open(searchUrl, '_blank', 'noopener,noreferrer');
     }
     setShowSearchSourcePopup(false);
     setHoveredSearchSource(null);
@@ -1599,16 +1599,21 @@ function App() {
 
   // --- Search Config ---
   const handleSaveSearchConfig = async (sources: ExternalSearchSource[], mode: SearchMode, selectedSource?: ExternalSearchSource | null) => {
+      const safeSources = sources.filter(isSafeSearchSource);
+      const requestedSelectedSource = selectedSource !== undefined ? selectedSource : selectedSearchSource;
+      const safeSelectedSource = isSafeSearchSource(requestedSelectedSource)
+          ? safeSources.find(source => source.id === requestedSelectedSource.id) ?? null
+          : null;
       const searchConfig: SearchConfig = {
           mode,
-          externalSources: sources,
-          selectedSource: selectedSource !== undefined ? selectedSource : selectedSearchSource
+          externalSources: safeSources,
+          selectedSource: safeSelectedSource
       };
       
-      setExternalSearchSources(sources);
+      setExternalSearchSources(safeSources);
       setSearchMode(mode);
       if (selectedSource !== undefined) {
-          setSelectedSearchSource(selectedSource);
+          setSelectedSearchSource(safeSelectedSource);
       }
       
       // 只保存到KV空间（搜索配置允许无密码访问�?
@@ -1826,7 +1831,7 @@ function App() {
               
               // 使用第一个默认搜索源立即执行搜索
               const searchUrl = defaultSources[0].url.replace('{query}', encodeURIComponent(searchQuery));
-              window.open(searchUrl, '_blank');
+              window.open(searchUrl, '_blank', 'noopener,noreferrer');
               return;
           }
           
@@ -1839,9 +1844,9 @@ function App() {
               }
           }
           
-          if (source) {
+          if (source && isSafeSearchSource(source)) {
               const searchUrl = source.url.replace('{query}', encodeURIComponent(searchQuery));
-              window.open(searchUrl, '_blank');
+              window.open(searchUrl, '_blank', 'noopener,noreferrer');
           }
       }
   };
@@ -1853,8 +1858,11 @@ function App() {
   };
 
   const handleRestoreSearchConfig = (restoredSearchConfig: SearchConfig) => {
+      const safeSearchConfig = sanitizeSearchConfig(restoredSearchConfig);
+      if (!safeSearchConfig) return;
+
       // 传入备份中的 selectedSource，避免回落到当前内存中的旧值
-      handleSaveSearchConfig(restoredSearchConfig.externalSources, restoredSearchConfig.mode, restoredSearchConfig.selectedSource ?? null);
+      handleSaveSearchConfig(safeSearchConfig.externalSources, safeSearchConfig.mode, safeSearchConfig.selectedSource ?? null);
   };
 
   // --- Filtering & Memo ---

@@ -950,7 +950,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             filteredDirectLinks.forEach(link => {
                 const iconSrc = getFaviconUrl(link.url);
                 html += \`
-                    <a href="\${escAttr(link.url)}" target="_blank" class="link-item">
+                    <a href="\${escAttr(link.url)}" target="_blank" rel="noopener noreferrer" class="link-item">
                         <div class="link-icon"><img src="\${iconSrc}" /></div>
                         <div class="link-info">
                             <div class="link-title">\${escHtml(link.title)}</div>
@@ -971,7 +971,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         \${isSubLocked ? '' : sub.links.map(link => {
                             const iconSrc = getFaviconUrl(link.url);
                             return \`
-                                <a href="\${escAttr(link.url)}" target="_blank" class="link-item" style="margin-left: 8px;">
+                                <a href="\${escAttr(link.url)}" target="_blank" rel="noopener noreferrer" class="link-item" style="margin-left: 8px;">
                                     <div class="link-icon"><img src="\${iconSrc}" /></div>
                                     <div class="link-info">
                                         <div class="link-title">\${escHtml(link.title)}</div>

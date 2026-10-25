@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { X, Upload, FileText, ArrowRight, Check, AlertCircle, FolderInput, ListTree, Database } from 'lucide-react';
 import { Category, LinkItem, SearchConfig, AIConfig } from '../types';
 import { parseBookmarks } from '../services/bookmarkParser';
-import { isSafeBookmarkUrl } from '../services/urlSafety';
+import { isSafeBookmarkUrl, sanitizeSearchConfig } from '../services/urlSafety';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -73,7 +73,7 @@ const ImportModal: React.FC<ImportModalProps> = ({
         })
         .map((link: LinkItem) => ({ ...link, url: link.url.trim() })),
       categories: data.categories,
-      searchConfig: data.searchConfig,
+      searchConfig: sanitizeSearchConfig(data.searchConfig) || undefined,
       aiConfig: data.aiConfig
     };
   };
