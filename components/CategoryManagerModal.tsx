@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, ArrowUp, ArrowDown, Trash2, Edit2, Plus, Check, Lock, Unlock, Palette } from 'lucide-react';
 import { Category } from '../types';
 import Icon from './Icon';
@@ -14,6 +14,8 @@ interface CategoryManagerModalProps {
   onDeleteCategory: (id: string, mode: 'migrate' | 'delete_all', targetId?: string) => void;
   onVerifyPassword?: (password: string) => Promise<boolean>;
 }
+
+const CATEGORY_MANAGER_UNLOCK_DURATION_MS = 10 * 60 * 1000;
 
 const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({ 
   isOpen, 
@@ -45,9 +47,63 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     categoryName: string;
   } | null>(null);
 
+  // 临时授权仅保存在当前组件内存中，不保存密码或写入任何浏览器存储。
+  const [isTemporarilyUnlocked, setIsTemporarilyUnlocked] = useState(false);
+  const unlockExpiresAtRef = useRef(0);
+  const unlockTimerRef = useRef<number | null>(null);
+
   // 删除确认弹窗状态
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deletingCategory, setDeletingCategory] = useState<Category | null>(null);
+
+  const lockCategoryManager = () => {
+    if (unlockTimerRef.current !== null) {
+      window.clearTimeout(unlockTimerRef.current);
+      unlockTimerRef.current = null;
+    }
+    unlockExpiresAtRef.current = 0;
+    setIsTemporarilyUnlocked(false);
+  };
+
+  const refreshTemporaryUnlock = () => {
+    if (unlockTimerRef.current !== null) {
+      window.clearTimeout(unlockTimerRef.current);
+    }
+
+    unlockExpiresAtRef.current = Date.now() + CATEGORY_MANAGER_UNLOCK_DURATION_MS;
+    unlockTimerRef.current = window.setTimeout(
+      lockCategoryManager,
+      CATEGORY_MANAGER_UNLOCK_DURATION_MS
+    );
+    setIsTemporarilyUnlocked(true);
+  };
+
+  const hasActiveTemporaryUnlock = () => {
+    if (!isTemporarilyUnlocked || Date.now() >= unlockExpiresAtRef.current) {
+      if (isTemporarilyUnlocked) {
+        lockCategoryManager();
+      }
+      return false;
+    }
+
+    refreshTemporaryUnlock();
+    return true;
+  };
+
+  useEffect(() => {
+    return () => {
+      if (unlockTimerRef.current !== null) {
+        window.clearTimeout(unlockTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleClose = () => {
+    lockCategoryManager();
+    setPendingAction(null);
+    setIsAuthModalOpen(false);
+    onClose();
+  };
 
   if (!isOpen) return null;
 
@@ -142,8 +198,7 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
 
   // 处理编辑分类前的验证
   const handleStartEdit = (cat: Category) => {
-    if (!onVerifyPassword) {
-      // 如果没有提供验证函数，直接编辑
+    if (!onVerifyPassword || hasActiveTemporaryUnlock()) {
       startEdit(cat);
       return;
     }
@@ -161,8 +216,7 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
 
   // 处理删除分类前的验证
   const handleDeleteClick = (cat: Category) => {
-    if (!onVerifyPassword) {
-      // 如果没有提供验证函数，直接打开删除确认弹窗
+    if (!onVerifyPassword || hasActiveTemporaryUnlock()) {
       setDeletingCategory(cat);
       setIsDeleteModalOpen(true);
       return;
@@ -182,6 +236,9 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   // 处理验证成功后的操作
   const handleAuthSuccess = () => {
     if (!pendingAction) return;
+
+    refreshTemporaryUnlock();
+    setIsAuthModalOpen(false);
 
     if (pendingAction.type === 'edit') {
       const cat = categories.find(c => c.id === pendingAction.categoryId);
@@ -326,11 +383,31 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col max-h-[85vh]">
-        <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-700">
-          <h3 className="text-lg font-semibold dark:text-white">分类管理</h3>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors">
-            <X className="w-5 h-5 dark:text-slate-400" />
-          </button>
+        <div className="flex justify-between items-center gap-3 p-4 border-b border-slate-200 dark:border-slate-700">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold dark:text-white">分类管理</h3>
+            {isTemporarilyUnlocked && (
+              <p className="mt-0.5 text-xs text-emerald-600 dark:text-emerald-400" title="连续操作会刷新有效期；关闭弹窗或闲置 10 分钟后自动锁定">
+                已临时解锁，闲置 10 分钟后自动锁定
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {isTemporarilyUnlocked && (
+              <button
+                type="button"
+                onClick={lockCategoryManager}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                title="立即清除本次分类管理临时授权"
+              >
+                <Lock size={14} />
+                立即锁定
+              </button>
+            )}
+            <button onClick={handleClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors">
+              <X className="w-5 h-5 dark:text-slate-400" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
