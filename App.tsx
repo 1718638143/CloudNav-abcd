@@ -171,7 +171,7 @@ function App() {
       }
       return {
           provider: 'gemini',
-          apiKey: process.env.API_KEY || '', 
+          apiKey: '',
           baseUrl: '',
           model: 'gemini-2.5-flash'
       };

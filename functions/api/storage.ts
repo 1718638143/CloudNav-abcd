@@ -1,3 +1,5 @@
+import { getExpiryDays, readExpiryDays, signToken, verifyAuthToken } from './auth';
+
 interface Env {
   CLOUDNAV_KV: any;
   PASSWORD: string;
@@ -41,57 +43,6 @@ const getRequireLoginAccess = async (env: Env): Promise<boolean> => {
   return true;
 };
 
-const encoder = new TextEncoder();
-
-const getAuthSecret = (env: Env): string => env.AUTH_SECRET || env.PASSWORD || '';
-
-/** 签名登录令牌：`${issuedAt}.${hmac}`，过期由令牌自身决定，不再使用全局 last_auth_time */
-const signToken = async (env: Env, issuedAt: number): Promise<string> => {
-  const key = await crypto.subtle.importKey(
-    'raw', encoder.encode(getAuthSecret(env)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(String(issuedAt)));
-  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `${issuedAt}.${hex}`;
-};
-
-const timingSafeEqual = (a: string, b: string): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-};
-
-/** 0 表示永不过期；缺失或非数字才回退 7 天，不能用 `||` 把合法的 0 否掉 */
-const readExpiryDays = (config: any): number => {
-  const days = Number(config?.passwordExpiryDays);
-  return Number.isFinite(days) && days >= 0 ? days : 7;
-};
-
-const getExpiryDays = async (env: Env): Promise<number> => {
-  try {
-    const str = await env.CLOUDNAV_KV.get('website_config');
-    return readExpiryDays(str ? JSON.parse(str) : {});
-  } catch {
-    return 7;
-  }
-};
-
-/** 校验签名令牌是否本服务签发且未过期。旧版明文密码不再作为通行凭据。 */
-const verifyToken = async (env: Env, token: string | null, expiryDays: number): Promise<boolean> => {
-  if (!token || !getAuthSecret(env)) return false;
-  const dot = token.lastIndexOf('.');
-  if (dot <= 0) return false;
-  const issuedStr = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const issuedAt = Number(issuedStr);
-  if (!Number.isFinite(issuedAt) || issuedAt <= 0) return false;
-  const expected = await signToken(env, issuedAt);
-  if (!timingSafeEqual(token, expected)) return false;
-  if (expiryDays > 0 && Date.now() - issuedAt > expiryDays * 24 * 60 * 60 * 1000) return false;
-  return true;
-};
-
 const unauthorized = (request: Request, message: string) => new Response(JSON.stringify({ error: message }), {
   status: 401,
   headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -107,7 +58,7 @@ const verifyAccess = async (env: Env, request: Request): Promise<Response | null
   }
   const token = request.headers.get('x-auth-password');
   const expiryDays = await getExpiryDays(env);
-  const ok = await verifyToken(env, token, expiryDays);
+  const ok = await verifyAuthToken(env, token, expiryDays);
   if (ok) return null;
   // 令牌格式正确但签名不匹配或超过有效期，统一提示重新登录
   const looksLikeToken = !!token && token.includes('.');
@@ -174,7 +125,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
         requireLoginAccess: websiteConfig.requireLoginAccess,
       };
       const expiryDays = await getExpiryDays(env);
-      const authed = await verifyToken(env, request.headers.get('x-auth-password'), expiryDays);
+      const authed = await verifyAuthToken(env, request.headers.get('x-auth-password'), expiryDays);
       const body = authed ? { ...publicConfig, passwordExpiryDays: readExpiryDays(websiteConfig) } : publicConfig;
       return new Response(JSON.stringify(body), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -250,7 +201,7 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
       verified = true;
     } else {
       // 关闭访问验密时仍识别有效令牌，以便已登录用户拿到完整数据而不是脱敏视图
-      verified = await verifyToken(env, request.headers.get('x-auth-password'), await getExpiryDays(env));
+      verified = await verifyAuthToken(env, request.headers.get('x-auth-password'), await getExpiryDays(env));
     }
     
     if (!data) {
@@ -345,7 +296,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     // 如果是保存搜索配置（允许无密码访问，因为搜索配置不包含敏感数据）
     if (body.saveConfig === 'search') {
       // 登录后的请求头是签名令牌，不能再和明文密码做全等比较
-      if (serverPassword && !(await verifyToken(env, providedPassword, await getExpiryDays(env)))) {
+      if (serverPassword && !(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -360,7 +311,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     
     // 如果是保存图标（需令牌校验，防止匿名滥用刷写 KV）
     if (body.saveConfig === 'favicon') {
-      if (serverPassword && !(await verifyToken(env, providedPassword, await getExpiryDays(env)))) {
+      if (serverPassword && !(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -385,7 +336,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     
     // 保存 AI 配置、网站配置、书签数据：校验签名令牌，不再要求请求头等于明文密码
     if (serverPassword) {
-      if (!(await verifyToken(env, providedPassword, await getExpiryDays(env)))) {
+      if (!(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },

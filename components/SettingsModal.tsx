@@ -374,10 +374,10 @@ const CONFIG = {
   apiBase: "${domain}"
 };
 
-// 密码只存放在浏览器本地，不写入扩展源码
-async function getPassword() {
-  const stored = await chrome.storage.local.get('cloudnav_password');
-  return stored.cloudnav_password || '';
+// 仅在浏览器本地保存登录后签发的令牌，不保存明文密码
+async function getAuthToken() {
+  const stored = await chrome.storage.local.get('cloudnav_auth_token');
+  return stored.cloudnav_auth_token || '';
 }
 
 let linkCache = [];
@@ -542,9 +542,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 async function saveLink(title, url, categoryId, icon = '') {
-    const password = await getPassword();
-    if (!password) {
-        notify('保存失败', '请先打开侧边栏输入访问密码。');
+    const authToken = await getAuthToken();
+    if (!authToken) {
+        notify('保存失败', '请先打开侧边栏登录。');
         return;
     }
 
@@ -560,7 +560,7 @@ async function saveLink(title, url, categoryId, icon = '') {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
-                'x-auth-password': password
+                'x-auth-password': authToken
             },
             body: JSON.stringify({
                 title: title || '未命名',
@@ -719,15 +719,30 @@ function notify(title, message) {
   apiBase: "${domain}"
 };
 
-async function getPassword() {
-  const stored = await chrome.storage.local.get('cloudnav_password');
-  return stored.cloudnav_password || '';
+async function getAuthToken() {
+  const stored = await chrome.storage.local.get('cloudnav_auth_token');
+  return stored.cloudnav_auth_token || '';
 }
 
-function askPassword() {
-  const entered = window.prompt('请输入 CloudNav 访问密码（仅保存在本机浏览器）');
-  if (!entered) return Promise.resolve('');
-  return chrome.storage.local.set({ cloudnav_password: entered }).then(() => entered);
+async function askPassword() {
+  const entered = window.prompt('请输入 CloudNav 访问密码');
+  if (!entered) return '';
+
+  const response = await fetch(\`\${CONFIG.apiBase}/api/storage\`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-auth-password': entered
+    },
+    body: JSON.stringify({ authOnly: true })
+  });
+  if (!response.ok) throw new Error('密码错误');
+  const result = await response.json();
+  if (!result.token) throw new Error('登录响应缺少令牌');
+
+  await chrome.storage.local.set({ cloudnav_auth_token: result.token });
+  await chrome.storage.local.remove('cloudnav_password');
+  return result.token;
 }
 const CACHE_KEY = 'cloudnav_data';
 
@@ -994,17 +1009,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             refreshBtn.classList.add('rotating');
             container.innerHTML = '<div class="loading">同步数据中...</div>';
             
-            let password = await getPassword();
-            if (!password) password = await askPassword();
-            if (!password) throw new Error('未输入访问密码');
+            let authToken = await getAuthToken();
+            if (!authToken) authToken = await askPassword();
+            if (!authToken) throw new Error('未输入访问密码');
 
             const res = await fetch(\`\${CONFIG.apiBase}/api/storage\`, {
-                headers: { 'x-auth-password': password }
+                headers: { 'x-auth-password': authToken }
             });
             
             if (res.status === 401) {
-                await chrome.storage.local.remove('cloudnav_password');
-                throw new Error('密码错误，请点刷新重新输入');
+                await chrome.storage.local.remove('cloudnav_auth_token');
+                throw new Error('登录已过期，请点刷新重新输入');
             }
             if (!res.ok) throw new Error("Sync failed");
             

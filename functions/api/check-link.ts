@@ -1,6 +1,9 @@
+import { verifyAuthToken } from './auth';
+
 interface Env {
   CLOUDNAV_KV: any;
   PASSWORD: string;
+  AUTH_SECRET?: string;
 }
 
 // Origin 动态回显（仅同主机放行），不再使用 '*'
@@ -30,10 +33,17 @@ export const onRequestOptions = async (context: { request: Request }) => {
 export const onRequestPost = async (context: { request: Request; env: Env }) => {
   const { request, env } = context;
 
-  // 需要密码：防止被滥用作为公开的代理探测接口
-  const providedPassword = request.headers.get('x-auth-password');
-  if (!env.PASSWORD || providedPassword !== env.PASSWORD) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+  // 需要登录令牌：防止被滥用作为公开的代理探测接口
+  if (!env.PASSWORD) {
+    return new Response(JSON.stringify({ error: 'Server misconfigured: PASSWORD not set' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+    });
+  }
+
+  const token = request.headers.get('x-auth-password');
+  if (!(await verifyAuthToken(env, token))) {
+    return new Response(JSON.stringify({ error: '登录已过期，请重新输入' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
