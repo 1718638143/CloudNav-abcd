@@ -33,8 +33,11 @@ const timingSafeEqual = (left: string, right: string): boolean => {
   return difference === 0;
 };
 
-export const readExpiryDays = (config: any): number => {
-  const days = Number(config?.passwordExpiryDays);
+export const readExpiryDays = (config: unknown): number => {
+  const value = config && typeof config === 'object' && 'passwordExpiryDays' in config
+    ? config.passwordExpiryDays
+    : undefined;
+  const days = Number(value);
   return Number.isFinite(days) && days >= 0 ? days : 7;
 };
 

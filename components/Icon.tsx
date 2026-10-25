@@ -7,9 +7,10 @@ interface IconProps {
   className?: string;
 }
 
+const iconComponents = LucideIcons as unknown as Record<string, LucideIcons.LucideIcon>;
+
 const Icon: React.FC<IconProps> = ({ name, size = 20, className }) => {
-  // @ts-ignore - Dynamic access to Lucide icons
-  const IconComponent = LucideIcons[name] || LucideIcons.Link;
+  const IconComponent = iconComponents[name] || LucideIcons.Link;
   return <IconComponent size={size} className={className} />;
 };
 

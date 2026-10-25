@@ -31,6 +31,9 @@ const explainStatus = (status: number): string => {
     }
 };
 
+const getErrorMessage = (error: unknown, fallback: string): string =>
+    error instanceof Error && error.message ? error.message : fallback;
+
 // 保存 KV 在线备份
 export const saveKvBackup = async (authToken: string | null, data: { links: LinkItem[], categories: Category[], searchConfig?: SearchConfig, aiConfig?: AIConfig }): Promise<{ success: true; id: string; total: number } | { success: false; error: string }> => {
     try {
@@ -54,8 +57,8 @@ export const saveKvBackup = async (authToken: string | null, data: { links: Link
             return { success: true, id: result.id, total: result.total ?? 0 };
         }
         return { success: false, error: '保存失败，返回数据异常。' };
-    } catch (e: any) {
-        return { success: false, error: `网络错误：${e?.message || '无法连接服务器'}` };
+    } catch (error: unknown) {
+        return { success: false, error: `网络错误：${getErrorMessage(error, '无法连接服务器')}` };
     }
 };
 
@@ -75,8 +78,8 @@ export const listKvBackups = async (authToken: string | null): Promise<{ files: 
             return { files: result.files as KvBackupFile[], error: null };
         }
         return { files: [], error: null };
-    } catch (e: any) {
-        return { files: null, error: `网络错误：${e?.message || '无法连接服务器'}` };
+    } catch (error: unknown) {
+        return { files: null, error: `网络错误：${getErrorMessage(error, '无法连接服务器')}` };
     }
 };
 
@@ -104,8 +107,8 @@ export const downloadKvBackup = async (authToken: string | null, id: string): Pr
             return { data: { links, categories, searchConfig: result.searchConfig, aiConfig: result.aiConfig } };
         }
         return { data: null, error: '备份文件结构不完整（缺少 links 或 categories）。' };
-    } catch (e: any) {
-        return { data: null, error: `网络错误：${e?.message || '无法连接服务器'}` };
+    } catch (error: unknown) {
+        return { data: null, error: `网络错误：${getErrorMessage(error, '无法连接服务器')}` };
     }
 };
 
@@ -124,7 +127,7 @@ export const deleteKvBackup = async (authToken: string | null, id: string): Prom
 
         const result = await response.json();
         return result?.success === true ? null : '删除失败，返回数据异常。';
-    } catch (e: any) {
-        return `网络错误：${e?.message || '无法连接服务器'}`;
+    } catch (error: unknown) {
+        return `网络错误：${getErrorMessage(error, '无法连接服务器')}`;
     }
 };

@@ -91,10 +91,22 @@ export const testAIConnection = async (config: AIConfig): Promise<AIConnectionTe
         headers: { 'Authorization': `Bearer ${config.apiKey}` }
       });
       if (res.ok) {
-        const data = await res.json();
-        const models: string[] = (data.data || data.models || [])
-          .map((m: any) => m.id || m.name || '')
-          .filter(Boolean);
+        const data: unknown = await res.json();
+        const modelItems = data && typeof data === 'object'
+          ? ('data' in data && Array.isArray(data.data)
+              ? data.data
+              : 'models' in data && Array.isArray(data.models)
+                ? data.models
+                : [])
+          : [];
+        const models = modelItems
+          .map((model): string => {
+            if (!model || typeof model !== 'object') return '';
+            if ('id' in model && typeof model.id === 'string') return model.id;
+            if ('name' in model && typeof model.name === 'string') return model.name;
+            return '';
+          })
+          .filter((model): model is string => Boolean(model));
         if (models.length > 0) {
           return { ok: true, message: `连接成功，发现 ${models.length} 个可用模型`, models };
         }
@@ -122,8 +134,9 @@ export const testAIConnection = async (config: AIConfig): Promise<AIConnectionTe
     }
     const errText = await res.text();
     return { ok: false, message: `连接失败 (${res.status}): ${errText.slice(0, 120)}` };
-  } catch (e: any) {
-    return { ok: false, message: `连接失败: ${e?.message || '网络错误'}` };
+  } catch (error: unknown) {
+    const message = error instanceof Error && error.message ? error.message : '网络错误';
+    return { ok: false, message: `连接失败: ${message}` };
   }
 };
 

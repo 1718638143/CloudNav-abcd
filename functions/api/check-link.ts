@@ -78,8 +78,8 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       if (isPrivateHost) {
         throw new Error('private address');
       }
-    } catch (e: any) {
-      if (e?.message === 'private address') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === 'private address') {
         return new Response(JSON.stringify({ error: '不允许探测内网/回环地址' }), {
           status: 400,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -116,9 +116,9 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       return new Response(JSON.stringify({ status, verdict }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
-    } catch (e: any) {
+    } catch (error: unknown) {
       // 超时或网络层错误（DNS 失败/连接拒绝）
-      const aborted = e?.name === 'AbortError';
+      const aborted = error instanceof Error && error.name === 'AbortError';
       return new Response(
         JSON.stringify({ status: 0, verdict: 'dead', message: aborted ? 'timeout' : 'unreachable' }),
         { headers: { 'Content-Type': 'application/json', ...corsHeaders(request) } }
@@ -126,7 +126,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     } finally {
       clearTimeout(timer);
     }
-  } catch (err: any) {
+  } catch {
     return new Response(JSON.stringify({ error: 'Failed to check link' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },

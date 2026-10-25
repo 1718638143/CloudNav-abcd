@@ -62,8 +62,10 @@ async function fetchWithTimeout(url: string, signal?: AbortSignal): Promise<numb
       signal: ctrl.signal,
     });
     return res.type === 'opaque' ? 200 : res.status;
-  } catch (e: any) {
-    if (e?.name === 'AbortError') return signal?.aborted ? undefined : 0;
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return signal?.aborted ? undefined : 0;
+    }
     return 0; // 网络层错误（DNS 失败 / 连接拒绝等）
   } finally {
     clearTimeout(timer);

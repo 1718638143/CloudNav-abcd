@@ -256,7 +256,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen, activeTab]);
 
   // ============ 备份恢复 tab ============
-  const handleSiteChange = (key: keyof SiteSettings, value: any) => {
+  const handleSiteChange = <K extends keyof SiteSettings>(key: K, value: SiteSettings[K]) => {
     setLocalSiteSettings(prev => ({ ...prev, [key]: value }));
     // 注意：不再在每次按键时立即写 KV（高频写 + parseInt 兼空为 0 会导致误存“永不过期”），
     // passwordExpiryDays 随设置弹窗保存（handleSave → onSave → App 同步 KV）一起提交
@@ -327,7 +327,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const getManifestJson = () => {
-    const json: any = {
+    const json: {
+      manifest_version: number;
+      name: string;
+      version: string;
+      minimum_chrome_version: string;
+      description: string;
+      permissions: string[];
+      background: { service_worker: string };
+      action: { default_title: string };
+      side_panel: { default_path: string };
+      icons: Record<string, string>;
+      commands: Record<string, {
+        suggested_key: { default: string; mac: string };
+        description: string;
+      }>;
+      browser_specific_settings?: {
+        gecko: { id: string; strict_min_version: string };
+      };
+    } = {
         manifest_version: 3,
         name: (localSiteSettings.navTitle || "CloudNav") + " Pro",
         version: "7.6",

@@ -23,7 +23,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, AIConfig, SearchMode, ExternalSearchSource, SearchConfig } from './types';
+import { LinkItem, Category, DEFAULT_CATEGORIES, INITIAL_LINKS, AIConfig, SearchMode, ExternalSearchSource, SearchConfig, SiteSettings } from './types';
 import { parseBookmarks } from './services/bookmarkParser';
 import { matchPinyinInitials } from './services/pinyinService';
 import { isSafeSearchSource, sanitizeSearchConfig } from './services/urlSafety';
@@ -58,8 +58,8 @@ const PAGE_SIZE = 100;
 
 // 判断一份数据是否是服务端脱敏视图（公开视图：加密分类密码被剥、其链接被过滤）。
 // 脱敏数据只可用于展示，绝不能回写 app_data，否则会把加密分类的密码抹掉、丢失受保护链接。
-const isSanitizedData = (data: any): boolean => {
-  return !!data && data._sanitized === true;
+const isSanitizedData = (data: unknown): boolean => {
+  return typeof data === 'object' && data !== null && '_sanitized' in data && data._sanitized === true;
 };
 
 // 创建可排序的链接卡片组件（模块顶层定义，避免每次渲染重建组件导致全量重挂载）
@@ -1366,7 +1366,7 @@ function App() {
       updateData(updated, categories);
   };
 
-  const handleSaveAIConfig = async (config: AIConfig, newSiteSettings?: any) => {
+  const handleSaveAIConfig = async (config: AIConfig, newSiteSettings?: SiteSettings) => {
       setAiConfig(config);
       localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(config));
       
