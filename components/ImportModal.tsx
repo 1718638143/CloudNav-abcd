@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { X, Upload, FileText, ArrowRight, Check, AlertCircle, FolderInput, ListTree, Database } from 'lucide-react';
 import { Category, LinkItem, SearchConfig, AIConfig } from '../types';
 import { parseBookmarks } from '../services/bookmarkParser';
+import { isSafeBookmarkUrl } from '../services/urlSafety';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -56,7 +57,21 @@ const ImportModal: React.FC<ImportModalProps> = ({
     }
     
     return {
-      links: data.links,
+      // JSON 备份同样属于不可信输入，只保留结构完整且协议安全的链接。
+      links: data.links
+        .filter((link: unknown): link is LinkItem => {
+          if (!link || typeof link !== 'object') return false;
+
+          const candidate = link as Partial<LinkItem>;
+          return (
+            typeof candidate.id === 'string' &&
+            typeof candidate.title === 'string' &&
+            typeof candidate.categoryId === 'string' &&
+            typeof candidate.createdAt === 'number' &&
+            isSafeBookmarkUrl(candidate.url)
+          );
+        })
+        .map((link: LinkItem) => ({ ...link, url: link.url.trim() })),
       categories: data.categories,
       searchConfig: data.searchConfig,
       aiConfig: data.aiConfig

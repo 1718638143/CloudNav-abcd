@@ -1,5 +1,6 @@
 import { LinkItem, Category } from '../types';
 import { v4 as uuidv4 } from 'uuid'; // Assuming uuid is available or we use a simple generator
+import { isSafeBookmarkUrl } from './urlSafety';
 
 // Simple UUID generator fallback
 const generateId = () => {
@@ -69,11 +70,12 @@ export const parseBookmarks = async (file: File): Promise<ImportResult> => {
             const title = a.textContent || a.getAttribute('href') || 'No Title';
             const url = a.getAttribute('href');
             
-            if (url && !url.startsWith('chrome://') && !url.startsWith('about:')) {
+            // 仅导入可安全导航的网页协议，避免 javascript:、data: 等危险 URL 落库。
+            if (isSafeBookmarkUrl(url)) {
                 links.push({
                     id: generateId(),
                     title: title,
-                    url: url,
+                    url: url.trim(),
                     categoryId: getCategoryId(currentCategoryName),
                     createdAt: Date.now(),
                     icon: a.getAttribute('icon') || undefined
