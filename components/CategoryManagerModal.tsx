@@ -279,6 +279,10 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     setEditParentId(cat.parentId);
   };
 
+  const cancelEdit = () => {
+    setEditingId(null);
+  };
+
   const saveEdit = () => {
     if (!editingId || !editName.trim()) return;
     
@@ -507,7 +511,26 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
                   {/* Actions */}
                   <div className="flex items-center gap-1 self-start mt-1">
                     {editingId === cat.id ? (
-                       <button onClick={saveEdit} className="text-green-500 hover:bg-green-50 dark:hover:bg-slate-600 p-1.5 rounded bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-600"><Check size={16}/></button>
+                       <>
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600 p-1.5 rounded bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-600"
+                          title="取消修改"
+                          aria-label="取消修改"
+                        >
+                          <X size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={saveEdit}
+                          className="text-green-500 hover:bg-green-50 dark:hover:bg-slate-600 p-1.5 rounded bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-600"
+                          title="确认修改"
+                          aria-label="确认修改"
+                        >
+                          <Check size={16} />
+                        </button>
+                       </>
                     ) : (
                        <>
                         <button onClick={() => handleStartEdit(cat)} className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-slate-200 dark:hover:bg-slate-600 rounded">
