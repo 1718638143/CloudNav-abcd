@@ -1490,25 +1490,52 @@ document.addEventListener('DOMContentLoaded', async () => {
                             />
                         </div>
 
-                        <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
-                            <h4 className="text-sm font-semibold mb-2 dark:text-slate-200">连接测试</h4>
-                            <button 
-                                onClick={async () => {
-                                    setIsTestingConnection(true);
-                                    setConnectionTestResult(null);
-                                    const result = await testAIConnection(localConfig);
-                                    setConnectionTestResult(result);
-                                    setIsTestingConnection(false);
-                                }}
-                                disabled={isTestingConnection || !localConfig.apiKey || (localConfig.provider === 'openai' && !localConfig.baseUrl)}
-                                className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-colors border border-blue-200 dark:border-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={!localConfig.apiKey ? '请先填写 API Key' : '测试当前 AI 配置能否正常连通'}
-                            >
-                                {isTestingConnection ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
-                                {isTestingConnection ? '测试中...' : '测试连接'}
-                            </button>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-slate-100 dark:border-slate-700">
+                            <div className="min-w-0">
+                                <h4 className="text-sm font-semibold mb-2 dark:text-slate-200">连接测试</h4>
+                                <button
+                                    onClick={async () => {
+                                        setIsTestingConnection(true);
+                                        setConnectionTestResult(null);
+                                        const result = await testAIConnection(localConfig);
+                                        setConnectionTestResult(result);
+                                        setIsTestingConnection(false);
+                                    }}
+                                    disabled={isTestingConnection || !localConfig.apiKey || (localConfig.provider === 'openai' && !localConfig.baseUrl)}
+                                    className="flex items-center justify-center gap-2 w-full text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-colors border border-blue-200 dark:border-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={!localConfig.apiKey ? '请先填写 API Key' : '测试当前 AI 配置能否正常连通'}
+                                >
+                                    {isTestingConnection ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+                                    {isTestingConnection ? '测试中...' : '测试连接'}
+                                </button>
+                            </div>
+
+                            <div className="min-w-0">
+                                <h4 className="text-sm font-semibold mb-2 dark:text-slate-200">批量操作</h4>
+                                {isProcessing ? (
+                                    <div className="space-y-2">
+                                        <div className="flex justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                            <span className="truncate">正在生成描述... ({progress.current}/{progress.total})</span>
+                                            <button onClick={() => { shouldStopRef.current = true; setIsProcessing(false); }} className="shrink-0 text-red-500 flex items-center gap-1 hover:underline">
+                                                <PauseCircle size={12}/> 停止
+                                            </button>
+                                        </div>
+                                        <div className="w-full h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                                            <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${(progress.current / progress.total) * 100}%` }}></div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={handleBulkGenerate}
+                                        className="flex items-center justify-center gap-2 w-full text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 px-3 py-2 rounded-lg transition-colors border border-purple-200 dark:border-purple-800"
+                                    >
+                                        <Sparkles size={16} /> 一键补全所有缺失的描述
+                                    </button>
+                                )}
+                            </div>
+
                             {connectionTestResult && (
-                                <div className={`mt-3 p-3 rounded-lg border text-sm ${
+                                <div className={`sm:col-span-2 p-3 rounded-lg border text-sm ${
                                     connectionTestResult.ok 
                                         ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200 border-green-200 dark:border-green-900/50' 
                                         : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 border-red-200 dark:border-red-900/50'
@@ -1520,7 +1547,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     {connectionTestResult.models && connectionTestResult.models.length > 0 && (
                                         <div className="mt-2">
                                             <p className="text-xs opacity-70 mb-1">可用模型（点击填入）：</p>
-                                            <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                                            <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
                                                 {connectionTestResult.models.map(m => (
                                                     <button
                                                         key={m}
@@ -1538,30 +1565,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                                         </div>
                                     )}
                                 </div>
-                            )}
-                        </div>
-
-                        <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
-                            <h4 className="text-sm font-semibold mb-2 dark:text-slate-200">批量操作</h4>
-                            {isProcessing ? (
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-xs text-slate-600 dark:text-slate-400">
-                                        <span>正在生成描述... ({progress.current}/{progress.total})</span>
-                                        <button onClick={() => { shouldStopRef.current = true; setIsProcessing(false); }} className="text-red-500 flex items-center gap-1 hover:underline">
-                                            <PauseCircle size={12}/> 停止
-                                        </button>
-                                    </div>
-                                    <div className="w-full h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                                        <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${(progress.current / progress.total) * 100}%` }}></div>
-                                    </div>
-                                </div>
-                            ) : (
-                                <button 
-                                    onClick={handleBulkGenerate}
-                                    className="flex items-center gap-2 text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 px-3 py-2 rounded-lg transition-colors border border-purple-200 dark:border-purple-800"
-                                >
-                                    <Sparkles size={16} /> 一键补全所有缺失的描述
-                                </button>
                             )}
                         </div>
                     </div>

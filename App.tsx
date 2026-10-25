@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Search, Plus, Upload, Moon, Sun, Menu, 
   Trash2, Edit2, Loader2, Cloud, CheckCircle2, AlertCircle,
@@ -30,15 +30,23 @@ import { isSafeSearchSource, sanitizeSearchConfig } from './services/urlSafety';
 import Icon from './components/Icon';
 import LinkModal from './components/LinkModal';
 import AuthModal from './components/AuthModal';
-import CategoryManagerModal from './components/CategoryManagerModal';
-import BackupModal from './components/BackupModal';
 import CategoryAuthModal from './components/CategoryAuthModal';
-import ImportModal from './components/ImportModal';
-import SettingsModal from './components/SettingsModal';
-import SearchConfigModal from './components/SearchConfigModal';
 import ContextMenu from './components/ContextMenu';
 import QRCodeModal from './components/QRCodeModal';
-import LinkCheckModal from './components/LinkCheckModal';
+
+const loadCategoryManagerModal = () => import('./components/CategoryManagerModal');
+const loadBackupModal = () => import('./components/BackupModal');
+const loadImportModal = () => import('./components/ImportModal');
+const loadSettingsModal = () => import('./components/SettingsModal');
+const loadSearchConfigModal = () => import('./components/SearchConfigModal');
+const loadLinkCheckModal = () => import('./components/LinkCheckModal');
+
+const CategoryManagerModal = lazy(loadCategoryManagerModal);
+const BackupModal = lazy(loadBackupModal);
+const ImportModal = lazy(loadImportModal);
+const SettingsModal = lazy(loadSettingsModal);
+const SearchConfigModal = lazy(loadSearchConfigModal);
+const LinkCheckModal = lazy(loadLinkCheckModal);
 
 // --- 配置�?---
 // 项目核心仓库地址
@@ -2176,70 +2184,84 @@ function App() {
         onUnlock={handleUnlockCategory}
       />
 
-      <CategoryManagerModal 
-        isOpen={isCatManagerOpen} 
-        onClose={() => setIsCatManagerOpen(false)}
-        categories={categories}
-        onUpdateCategories={handleUpdateCategories}
-        onDeleteCategory={handleDeleteCategory}
-        onVerifyPassword={handleCategoryActionAuth}
-      />
+      <Suspense fallback={null}>
+        {isCatManagerOpen && (
+          <CategoryManagerModal
+            isOpen
+            onClose={() => setIsCatManagerOpen(false)}
+            categories={categories}
+            onUpdateCategories={handleUpdateCategories}
+            onDeleteCategory={handleDeleteCategory}
+            onVerifyPassword={handleCategoryActionAuth}
+          />
+        )}
 
-      <BackupModal
-        isOpen={isBackupModalOpen}
-        onClose={() => setIsBackupModalOpen(false)}
-        links={links}
-        categories={categories}
-        onRestore={handleRestoreBackup}
-        authToken={authToken}
-        searchConfig={{ mode: searchMode, externalSources: externalSearchSources, selectedSource: selectedSearchSource }}
-        onRestoreSearchConfig={handleRestoreSearchConfig}
-        aiConfig={aiConfig}
-        onRestoreAIConfig={handleRestoreAIConfig}
-      />
+        {isBackupModalOpen && (
+          <BackupModal
+            isOpen
+            onClose={() => setIsBackupModalOpen(false)}
+            links={links}
+            categories={categories}
+            onRestore={handleRestoreBackup}
+            authToken={authToken}
+            searchConfig={{ mode: searchMode, externalSources: externalSearchSources, selectedSource: selectedSearchSource }}
+            onRestoreSearchConfig={handleRestoreSearchConfig}
+            aiConfig={aiConfig}
+            onRestoreAIConfig={handleRestoreAIConfig}
+          />
+        )}
 
-      <ImportModal
-        isOpen={isImportModalOpen}
-        onClose={() => setIsImportModalOpen(false)}
-        existingLinks={links}
-        categories={categories}
-        onImport={handleImportConfirm}
-        onImportSearchConfig={handleRestoreSearchConfig}
-        onImportAIConfig={handleRestoreAIConfig}
-      />
+        {isImportModalOpen && (
+          <ImportModal
+            isOpen
+            onClose={() => setIsImportModalOpen(false)}
+            existingLinks={links}
+            categories={categories}
+            onImport={handleImportConfirm}
+            onImportSearchConfig={handleRestoreSearchConfig}
+            onImportAIConfig={handleRestoreAIConfig}
+          />
+        )}
 
-      <SettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        config={aiConfig}
-        siteSettings={siteSettings}
-        onSave={handleSaveAIConfig}
-        links={links}
-        categories={categories}
-        onUpdateLinks={(newLinks) => updateData(newLinks, categories)}
-        authToken={authToken}
-        onToggleRequireLogin={handleToggleRequireLogin}
-        searchConfig={{ mode: searchMode, externalSources: externalSearchSources, selectedSource: selectedSearchSource }}
-        aiConfig={aiConfig}
-        onRestore={handleRestoreBackup}
-        onRestoreSearchConfig={handleRestoreSearchConfig}
-        onRestoreAIConfig={handleRestoreAIConfig}
-      />
+        {isSettingsModalOpen && (
+          <SettingsModal
+            isOpen
+            onClose={() => setIsSettingsModalOpen(false)}
+            config={aiConfig}
+            siteSettings={siteSettings}
+            onSave={handleSaveAIConfig}
+            links={links}
+            categories={categories}
+            onUpdateLinks={(newLinks) => updateData(newLinks, categories)}
+            authToken={authToken}
+            onToggleRequireLogin={handleToggleRequireLogin}
+            searchConfig={{ mode: searchMode, externalSources: externalSearchSources, selectedSource: selectedSearchSource }}
+            aiConfig={aiConfig}
+            onRestore={handleRestoreBackup}
+            onRestoreSearchConfig={handleRestoreSearchConfig}
+            onRestoreAIConfig={handleRestoreAIConfig}
+          />
+        )}
 
-      <SearchConfigModal
-        isOpen={isSearchConfigModalOpen}
-        onClose={() => setIsSearchConfigModalOpen(false)}
-        sources={externalSearchSources}
-        onSave={(sources) => handleSaveSearchConfig(sources, searchMode)}
-      />
+        {isSearchConfigModalOpen && (
+          <SearchConfigModal
+            isOpen
+            onClose={() => setIsSearchConfigModalOpen(false)}
+            sources={externalSearchSources}
+            onSave={(sources) => handleSaveSearchConfig(sources, searchMode)}
+          />
+        )}
 
-      <LinkCheckModal
-        isOpen={isLinkCheckModalOpen}
-        onClose={() => setIsLinkCheckModalOpen(false)}
-        links={links}
-        categories={categories}
-        authToken={authToken}
-      />
+        {isLinkCheckModalOpen && (
+          <LinkCheckModal
+            isOpen
+            onClose={() => setIsLinkCheckModalOpen(false)}
+            links={links}
+            categories={categories}
+            authToken={authToken}
+          />
+        )}
+      </Suspense>
 
       {/* Sidebar Mobile Overlay */}
       {sidebarOpen && (
@@ -2305,6 +2327,8 @@ function App() {
                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">分类目录</span>
                <button 
                   onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsCatManagerOpen(true); }}
+                  onPointerEnter={loadCategoryManagerModal}
+                  onFocus={loadCategoryManagerModal}
                   className="p-1 text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded"
                   title="管理分类"
                >
@@ -2385,6 +2409,8 @@ function App() {
             <div className="grid grid-cols-4 gap-2 mb-2">
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsImportModalOpen(true); }}
+                    onPointerEnter={loadImportModal}
+                    onFocus={loadImportModal}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
                     title="导入书签"
                 >
@@ -2394,6 +2420,8 @@ function App() {
                 
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsBackupModalOpen(true); }}
+                    onPointerEnter={loadBackupModal}
+                    onFocus={loadBackupModal}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
                     title="备份与恢复"
                 >
@@ -2403,6 +2431,8 @@ function App() {
 
                 <button 
                     onClick={() => setIsSettingsModalOpen(true)}
+                    onPointerEnter={loadSettingsModal}
+                    onFocus={loadSettingsModal}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
                     title="AI 设置"
                 >
@@ -2412,6 +2442,8 @@ function App() {
 
                 <button 
                     onClick={() => setIsLinkCheckModalOpen(true)}
+                    onPointerEnter={loadLinkCheckModal}
+                    onFocus={loadLinkCheckModal}
                     className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
                     title="批量检测链接可用性"
                 >
@@ -2511,6 +2543,8 @@ function App() {
                 {searchMode === 'external' && (
                   <button
                     onClick={() => setIsSearchConfigModalOpen(true)}
+                    onPointerEnter={loadSearchConfigModal}
+                    onFocus={loadSearchConfigModal}
                     className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
                     title="管理搜索源"
                   >
