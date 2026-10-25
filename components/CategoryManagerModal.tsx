@@ -99,7 +99,6 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   }, []);
 
   const handleClose = () => {
-    lockCategoryManager();
     setPendingAction(null);
     setIsAuthModalOpen(false);
     onClose();

@@ -2185,16 +2185,14 @@ function App() {
       />
 
       <Suspense fallback={null}>
-        {isCatManagerOpen && (
-          <CategoryManagerModal
-            isOpen
-            onClose={() => setIsCatManagerOpen(false)}
-            categories={categories}
-            onUpdateCategories={handleUpdateCategories}
-            onDeleteCategory={handleDeleteCategory}
-            onVerifyPassword={handleCategoryActionAuth}
-          />
-        )}
+        <CategoryManagerModal
+          isOpen={isCatManagerOpen}
+          onClose={() => setIsCatManagerOpen(false)}
+          categories={categories}
+          onUpdateCategories={handleUpdateCategories}
+          onDeleteCategory={handleDeleteCategory}
+          onVerifyPassword={handleCategoryActionAuth}
+        />
 
         {isBackupModalOpen && (
           <BackupModal
