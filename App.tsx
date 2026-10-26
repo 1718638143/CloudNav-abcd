@@ -2075,7 +2075,7 @@ function App() {
             className={`flex flex-1 min-w-0 overflow-hidden h-full ${
               isDetailedView ? 'flex-col' : 'items-center'
             }`}
-            title={isDetailedView ? link.url : (link.description || link.url)} // 详情版视图只显示URL作为tooltip
+            title={link.description || link.url}
           >
             {/* 第一行：图标和标题水平排�?*/}
             <div className={`flex items-center gap-3 w-full`}>
@@ -2101,7 +2101,7 @@ function App() {
                 </p>
               )}
             {!isDetailedView && link.description && (
-              <div className="tooltip-custom absolute left-0 -top-8 w-max max-w-[200px] bg-black text-white text-xs p-2 rounded opacity-0 invisible group-hover:visible group-hover:opacity-100 transition-all z-20 pointer-events-none truncate">
+              <div className="tooltip-custom absolute left-0 bottom-full mb-2 w-max max-w-xs bg-black text-white text-xs leading-relaxed p-2 rounded opacity-0 invisible group-hover:visible group-hover:opacity-100 transition-all z-20 pointer-events-none whitespace-normal break-words line-clamp-4">
                 {link.description}
               </div>
             )}
