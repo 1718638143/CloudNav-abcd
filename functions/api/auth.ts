@@ -23,7 +23,7 @@ export const signToken = async (env: AuthEnv, issuedAt: number): Promise<string>
   return `${issuedAt}.${hex}`;
 };
 
-const timingSafeEqual = (left: string, right: string): boolean => {
+export const timingSafeEqual = (left: string, right: string): boolean => {
   if (left.length !== right.length) return false;
 
   let difference = 0;
@@ -66,6 +66,10 @@ export const verifyAuthToken = async (
 
   const issuedAt = Number(token.slice(0, separator));
   if (!Number.isFinite(issuedAt) || issuedAt <= 0) return false;
+
+  // 未来时间戳的令牌永远满足过期检查（Date.now() - issuedAt 为负数），必须拒绝；
+  // 允许 60 秒时钟偏差
+  if (issuedAt > Date.now() + 60_000) return false;
 
   const expected = await signToken(env, issuedAt);
   if (!timingSafeEqual(token, expected)) return false;

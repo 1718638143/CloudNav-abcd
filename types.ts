@@ -15,7 +15,7 @@ export interface Category {
   id: string;
   name: string;
   icon: string; // Lucide icon name or emoji
-  password?: string; // Optional password for category protection
+  password?: string; // 分类密码的存储值：PBKDF2 哈希（pbkdf2$iter$saltB64$hashB64，见 services/categoryPassword.ts）；旧数据兼容明文，登录后加载时会自动迁移为哈希
   parentId?: string; // ID of the parent category if this is a sub-category
 }
 

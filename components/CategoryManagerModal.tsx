@@ -5,6 +5,7 @@ import Icon from './Icon';
 import IconSelector from './IconSelector';
 import CategoryActionAuthModal from './CategoryActionAuthModal';
 import CategoryDeleteModal from './CategoryDeleteModal';
+import { hashCategoryPassword } from '../services/categoryPassword';
 
 interface CategoryManagerModalProps {
   isOpen: boolean;
@@ -28,6 +29,7 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editPassword, setEditPassword] = useState('');
+const [removeEditPassword, setRemoveEditPassword] = useState(false);
   const [editIcon, setEditIcon] = useState('');
   const [editParentId, setEditParentId] = useState<string | undefined>(undefined);
   
@@ -273,7 +275,9 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   const startEdit = (cat: Category) => {
     setEditingId(cat.id);
     setEditName(cat.name);
-    setEditPassword(cat.password || '');
+    // 不回填密码原值：存储的是哈希无法还原，留空表示保持现有密码不变
+    setEditPassword('');
+    setRemoveEditPassword(false);
     setEditIcon(cat.icon);
     setEditParentId(cat.parentId);
   };
@@ -282,25 +286,58 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     setEditingId(null);
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editingId || !editName.trim()) return;
     
     const oldCat = categories.find(c => c.id === editingId);
     const parentChanged = oldCat?.parentId !== editParentId;
     
+    // 密码语义：输入新值 → 哈希后更新；留空 → 保持现有密码不变；勾选移除 → 清除
+    let nextPassword = oldCat?.password;
+    if (removeEditPassword) {
+      nextPassword = undefined;
+    } else if (editPassword.trim()) {
+      try {
+        nextPassword = await hashCategoryPassword(editPassword.trim());
+      } catch {
+        alert('密码处理失败，请重试');
+        return;
+      }
+    }
+    
     let updatedCats = categories.map(c => c.id === editingId ? { 
         ...c, 
         name: editName.trim(),
         icon: editIcon,
-        password: editPassword.trim() || undefined,
+        password: nextPassword,
         parentId: editParentId
     } : c);
 
     if (parentChanged) {
+      // 防环：不能把分类挂到它自己或它的子孙分类下
+      const isDescendantOf = (startId: string, ancestorId: string): boolean => {
+        let cursor = categories.find(c => c.id === startId);
+        while (cursor?.parentId) {
+          if (cursor.parentId === ancestorId) return true;
+          cursor = categories.find(c => c.id === cursor!.parentId);
+        }
+        return false;
+      };
+      if (editParentId && (editParentId === editingId || isDescendantOf(editParentId, editingId))) {
+        alert('不能把分类移动到它自己或它的子分类下面');
+        return;
+      }
+
       // 如果归属改变了，重新排列数组以保持父子关系连贯
       const catToMove = updatedCats.find(c => c.id === editingId)!;
-      // 移除旧位置
-      let filtered = updatedCats.filter(c => c.id !== editingId);
+      // 原二级子分类跟随父分类一起改挂到新父分类下（保持二级层级），
+      // 否则它们会变成 UI 无法展示/进入的三级分类
+      const movedChildren = categories
+        .filter(c => c.parentId === editingId)
+        .map(c => ({ ...c, parentId: editParentId }));
+      const movedChildIds = new Set(movedChildren.map(c => c.id));
+      // 移除旧位置（含跟随移动的子分类）
+      let filtered = updatedCats.filter(c => c.id !== editingId && !movedChildIds.has(c.id));
       
       if (editParentId) {
         // 插入到新父分类及其子分类之后
@@ -310,12 +347,15 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
           while (insertIdx < filtered.length && filtered[insertIdx].parentId === editParentId) {
             insertIdx++;
           }
-          filtered.splice(insertIdx, 0, catToMove);
+          filtered.splice(insertIdx, 0, catToMove, ...movedChildren);
+          updatedCats = filtered;
+        } else {
+          filtered.push(catToMove, ...movedChildren);
           updatedCats = filtered;
         }
       } else {
-        // 变为一级分类，移到末尾
-        filtered.push(catToMove);
+        // 变为一级分类：子分类仍挂在它下面，跟随移动到末尾
+        filtered.push(catToMove, ...movedChildren);
         updatedCats = filtered;
       }
     }
@@ -324,13 +364,22 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     setEditingId(null);
   };
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!newCatName.trim()) return;
+    let hashedPassword: string | undefined;
+    if (newCatPassword.trim()) {
+      try {
+        hashedPassword = await hashCategoryPassword(newCatPassword.trim());
+      } catch {
+        alert('密码处理失败，请重试');
+        return;
+      }
+    }
     const newCat: Category = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       name: newCatName.trim(),
       icon: newCatIcon,
-      password: newCatPassword.trim() || undefined,
+      password: hashedPassword,
       parentId: newCatParentId
     };
 
@@ -382,6 +431,9 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
     setNewCatPassword('');
     setNewCatIcon('Folder');
   };
+
+  // 当前正在编辑的分类（用于判断是否已有密码、展示移除选项）
+  const oldEditCat = editingId ? categories.find(c => c.id === editingId) : undefined;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -467,13 +519,24 @@ const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
                           <input 
                             type="password" 
                             value={editPassword}
-                            onChange={(e) => setEditPassword(e.target.value)}
+                            onChange={(e) => { setEditPassword(e.target.value); if (e.target.value) setRemoveEditPassword(false); }}
                             className="flex-1 p-1.5 px-2 text-sm rounded border border-blue-500 dark:bg-slate-800 dark:text-white outline-none"
-                            placeholder="密码（可选）"
+                            placeholder={oldEditCat?.password ? '已设置密码（输入可修改，留空保持不变）' : '密码（可选）'}
                           />
                         </div>
+                        {oldEditCat?.password && (
+                          <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 cursor-pointer select-none">
+                            <input 
+                              type="checkbox" 
+                              checked={removeEditPassword}
+                              onChange={(e) => { setRemoveEditPassword(e.target.checked); if (e.target.checked) setEditPassword(''); }}
+                              className="accent-amber-500"
+                            />
+                            移除密码保护
+                          </label>
+                        )}
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400">所属一级分类:</span>
+                                                                  <span className="text-xs text-slate-400">所属一级分类：</span>
                           <select
                             value={editParentId || ''}
                             onChange={(e) => setEditParentId(e.target.value || undefined)}

@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { X, Upload, FileText, ArrowRight, Check, AlertCircle, FolderInput, ListTree, Database } from 'lucide-react';
 import { Category, LinkItem, SearchConfig, AIConfig } from '../types';
+import { isSafeBookmarkUrl, sanitizeAIConfig, sanitizeSearchConfig } from '../services/urlSafety';
 import { parseBookmarks } from '../services/bookmarkParser';
-import { isSafeBookmarkUrl, sanitizeSearchConfig } from '../services/urlSafety';
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -55,6 +55,11 @@ const ImportModal: React.FC<ImportModalProps> = ({
     if (!data.links || !Array.isArray(data.links) || !data.categories || !Array.isArray(data.categories)) {
       throw new Error('Invalid backup file format');
     }
+
+    // 来自脱敏视图的快照（密码已剥、受保护链接已过滤）禁止恢复，与云端备份下载通道同规则
+    if ((data as Record<string, unknown>)._sanitized === true) {
+      throw new Error('该备份来自未登录的脱敏视图，缺少分类密码与受保护链接，已禁止恢复。');
+    }
     
     return {
       // JSON 备份同样属于不可信输入，只保留结构完整且协议安全的链接。
@@ -74,7 +79,8 @@ const ImportModal: React.FC<ImportModalProps> = ({
         .map((link: LinkItem) => ({ ...link, url: link.url.trim() })),
       categories: data.categories,
       searchConfig: sanitizeSearchConfig(data.searchConfig) || undefined,
-      aiConfig: data.aiConfig
+      // AI 配置含 baseUrl/apiKey，属于不可信输入：白名单校验后才允许导入，防恶意备份接管 AI 请求
+      aiConfig: sanitizeAIConfig(data.aiConfig) || undefined
     };
   };
 

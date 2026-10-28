@@ -52,9 +52,30 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
   try {
     const newLinkData = await request.json() as any;
     
-    // Validate input
-    if (!newLinkData.title || !newLinkData.url) {
+    // Validate input：字段结构与长度上限，防止脏数据/超大值写入 KV
+    if (!newLinkData || typeof newLinkData !== 'object') {
+        return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400, headers: corsHeaders(request) });
+    }
+    if (!newLinkData.title || !newLinkData.url || typeof newLinkData.title !== 'string' || typeof newLinkData.url !== 'string') {
         return new Response(JSON.stringify({ error: 'Missing title or url' }), { status: 400, headers: corsHeaders(request) });
+    }
+    if (newLinkData.title.length > 200 || newLinkData.url.length > 2048) {
+        return new Response(JSON.stringify({ error: 'Title or url too long' }), { status: 400, headers: corsHeaders(request) });
+    }
+    if (newLinkData.description !== undefined && (typeof newLinkData.description !== 'string' || newLinkData.description.length > 500)) {
+        return new Response(JSON.stringify({ error: 'Description too long' }), { status: 400, headers: corsHeaders(request) });
+    }
+    if (newLinkData.icon !== undefined && (typeof newLinkData.icon !== 'string' || newLinkData.icon.length > 8192)) {
+        return new Response(JSON.stringify({ error: 'Icon too long' }), { status: 400, headers: corsHeaders(request) });
+    }
+    // 仅允许 http/https，拒绁 javascript:/data: 等危险协议入库（与前端导入通道的白名单一致）
+    try {
+        const parsed = new URL(newLinkData.url);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return new Response(JSON.stringify({ error: 'Only http/https urls are allowed' }), { status: 400, headers: corsHeaders(request) });
+        }
+    } catch {
+        return new Response(JSON.stringify({ error: 'Invalid url' }), { status: 400, headers: corsHeaders(request) });
     }
 
     const loadData = async () => {
@@ -129,8 +150,9 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     fresh.links = seen.has(newLink.id) ? fresh.links : [newLink, ...fresh.links];
     if (!fresh.categories.length && currentData.categories.length) fresh.categories = currentData.categories;
 
-    // 6. Save back to KV
-    await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: fresh.links, categories: fresh.categories }));
+    // 6. Save back to KV（保留并递增 revision，维持与页面整包保存的乐观并发控制兼容）
+    const nextRevision = Date.now();
+    await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: fresh.links, categories: fresh.categories, revision: nextRevision }));
 
     return new Response(JSON.stringify({ 
         success: true, 

@@ -4,6 +4,7 @@ import {
   ShieldCheck, ShieldAlert, Play, RotateCcw, ChevronRight, ChevronDown, ExternalLink
 } from 'lucide-react';
 import { LinkItem, Category } from '../types';
+import Icon from './Icon';
 
 interface LinkCheckModalProps {
   isOpen: boolean;
@@ -451,7 +452,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
                         }`}
                       >
                         <span className="flex items-center gap-2 truncate">
-                          <span className="text-sm leading-none">{cat.icon}</span>
+                          <Icon name={cat.icon} size={14} className="shrink-0" />
                           <span className="truncate">{cat.name}</span>
                         </span>
                         <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ml-2 ${
@@ -476,7 +477,7 @@ const LinkCheckModal: React.FC<LinkCheckModalProps> = ({
                               }`}
                             >
                               <span className="flex items-center gap-2 truncate">
-                                <span className="text-sm leading-none">{sub.icon}</span>
+                                <Icon name={sub.icon} size={14} className="shrink-0" />
                                 <span className="truncate">{sub.name}</span>
                               </span>
                               <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ml-2 ${

@@ -287,6 +287,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     setProgress({ current: 0, total: missingLinks.length });
     
     let currentLinks = [...links];
+    let failedCount = 0;
 
     for (let i = 0; i < missingLinks.length; i++) {
         if (shouldStopRef.current) break;
@@ -294,15 +295,26 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         const link = missingLinks[i];
         try {
             const desc = await generateLinkDescription(link.title, link.url, localConfig);
-            currentLinks = currentLinks.map(l => l.id === link.id ? { ...l, description: desc } : l);
+            // AI 失败时 service 会返回占位文本而非抛错；把占位文本写入会让该链接永远跳过后续补全。
+            // 只有拿到有效描述才写入。
+            const isFailurePlaceholder = !desc || desc === '生成描述失败' || desc === '无法生成描述' || desc === '请在设置中配置 API Key';
+            if (isFailurePlaceholder) {
+                failedCount++;
+            } else {
+                currentLinks = currentLinks.map(l => l.id === link.id ? { ...l, description: desc } : l);
+            }
             setProgress({ current: i + 1, total: missingLinks.length });
         } catch (e) {
+            failedCount++;
             console.error(`Failed to generate for ${link.title}`, e);
         }
     }
 
     // 批量生成期间只在本地累积，结束时保存一次，避免每条描述都整包写 KV
     onUpdateLinks(currentLinks);
+    if (failedCount > 0) {
+        alert(`批量生成完成：成功 ${missingLinks.length - failedCount} 条，失败 ${failedCount} 条（失败的链接未写入占位文本，可重试）`);
+    }
     setIsProcessing(false);
   };
 
@@ -838,21 +850,53 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentAuthCat = null;
     };
 
+    // 分类密码校验：存储值为 pbkdf2$iterations$saltB64$hashB64（旧数据兼容明文比对）
+    async function verifyCategoryPassword(input, stored) {
+        if (!stored) return false;
+        const parts = String(stored).split('$');
+        if (parts.length !== 4 || parts[0] !== 'pbkdf2') return input === stored;
+        try {
+            const iterations = parseInt(parts[1], 10) || 100000;
+            const salt = Uint8Array.from(atob(parts[2]), function (c) { return c.charCodeAt(0); });
+            const expected = Uint8Array.from(atob(parts[3]), function (c) { return c.charCodeAt(0); });
+            const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(input), 'PBKDF2', false, ['deriveBits']);
+            const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt, iterations: iterations }, key, expected.length * 8);
+            const got = new Uint8Array(bits);
+            if (got.length !== expected.length) return false;
+            let diff = 0;
+            for (let i = 0; i < got.length; i++) diff |= got[i] ^ expected[i];
+            return diff === 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
     authCancel.onclick = hideAuthModal;
-    authConfirm.onclick = () => {
-        if (currentAuthCat && authInput.value === currentAuthCat.password) {
-            unlockedCategoryIds.add(currentAuthCat.id);
-            const idToExpand = currentAuthCat.id;
-            hideAuthModal();
-            render(searchInput.value);
-            // 如果解锁的是父分类，尝试展开它
-            if (!currentAuthCat.parentId) {
-                toggleCat(idToExpand, true);
+    authConfirm.onclick = async () => {
+        const cat = currentAuthCat;
+        if (!cat) return;
+        authConfirm.disabled = true;
+        try {
+            const ok = await verifyCategoryPassword(authInput.value, cat.password);
+            if (ok) {
+                unlockedCategoryIds.add(cat.id);
+                hideAuthModal();
+                render(searchInput.value);
+                // 如果解锁的是父分类，尝试展开它
+                // 注意：hideAuthModal 会把 currentAuthCat 置空，必须提前取 cat 引用，
+                // 否则这里对 null 取 parentId 会抛 TypeError，解锁后无法自动展开
+                if (!cat.parentId) {
+                    toggleCat(cat.id, true);
+                }
+            } else {
+                alert('密码错误');
+                authInput.value = '';
+                authInput.focus();
             }
-        } else {
-            alert('密码错误');
-            authInput.value = '';
-            authInput.focus();
+        } catch (e) {
+            alert('验证失败，请重试');
+        } finally {
+            authConfirm.disabled = false;
         }
     };
 
@@ -1077,8 +1121,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     className="text-xs flex items-center gap-1 text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
                     title="下载文件"
                 >
-                    <Download size={12}/>
-                    Download
+                                    <Download size={12}/>
+                下载
                 </button>
                 <div className="w-px h-3 bg-slate-300 dark:bg-slate-600"></div>
                 <button 
@@ -1463,7 +1507,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     className="w-full pl-10 p-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                                 />
                             </div>
-                            <p className="text-xs text-slate-500 mt-1">Key 仅存储在本地浏览器缓存中，不会发送到我们的服务器。</p>
+                            <p className="text-xs text-slate-500 mt-1">注意：Key 会随云端备份明文存储在你的 Cloudflare KV 中（受登录令牌保护），导出的备份文件同样包含明文 Key，请勿在共享环境暴露。</p>
                         </div>
 
                         {localConfig.provider === 'openai' && (
@@ -1683,7 +1727,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         
                         <div className="space-y-3">
                             <h4 className="font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                                <span className="flex items-center justify-center w-6 h-                                -6 rounded-full bg-blue-100 text-blue-600 text-xs font-bold">1</span>
+                                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-600 text-xs font-bold">1</span>
                                 输入访问密码
                             </h4>
                             <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">

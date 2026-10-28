@@ -1,5 +1,6 @@
 
 import { Category, LinkItem, SearchConfig, AIConfig } from "../types";
+import { isSafeBookmarkUrl, sanitizeAIConfig } from './urlSafety';
 
 export interface KvBackupFile {
     id: string;
@@ -102,9 +103,14 @@ export const downloadKvBackup = async (authToken: string | null, id: string): Pr
         }
 
         if (result && Array.isArray(result.links) && Array.isArray(result.categories)) {
-            const links = (result.links as LinkItem[]).filter(l => l && typeof l === 'object' && typeof l.id === 'string' && typeof l.url === 'string' && typeof l.categoryId === 'string');
+            // 来自脱敏视图的快照（密码已剥、受保护链接已过滤）禁止恢复，
+            // 否则会经 forceFullData 绕过闸门把残缺数据整包推上云端
+            if ((result as Record<string, unknown>)._sanitized === true) {
+                return { data: null, error: '该备份来自未登录的脱敏视图，缺少密码与受保护链接，已禁止恢复。' };
+            }
+            const links = (result.links as LinkItem[]).filter(l => l && typeof l === 'object' && typeof l.id === 'string' && typeof l.url === 'string' && typeof l.categoryId === 'string' && isSafeBookmarkUrl(l.url));
             const categories = (result.categories as Category[]).filter(c => c && typeof c === 'object' && typeof c.id === 'string' && typeof c.name === 'string');
-            return { data: { links, categories, searchConfig: result.searchConfig, aiConfig: result.aiConfig } };
+            return { data: { links, categories, searchConfig: result.searchConfig, aiConfig: sanitizeAIConfig(result.aiConfig) || undefined } };
         }
         return { data: null, error: '备份文件结构不完整（缺少 links 或 categories）。' };
     } catch (error: unknown) {

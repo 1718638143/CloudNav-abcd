@@ -1,26 +1,47 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AIConfig } from "../types";
 
+// AI 请求超时时间：避免网络异常时请求永久挂起
+const AI_TIMEOUT_MS = 60000;
+
+// 给任意 Promise 加超时限制（Gemini SDK 调用无原生 abort，用竞速方式兒底）
+const withTimeout = <T,>(promise: Promise<T>, ms = AI_TIMEOUT_MS): Promise<T> =>
+    Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`请求超时（${Math.round(ms / 1000)} 秒）`)), ms)
+        )
+    ]);
+
+// 带超时的 fetch（OpenAI 兼容接口用）
+const fetchWithTimeout = (url: string, init?: RequestInit): Promise<Response> =>
+    fetch(url, { ...init, signal: AbortSignal.timeout(AI_TIMEOUT_MS) });
+
+/**
+ * 把用户填写的 OpenAI 兼容 Base URL 归一化为以 /v{n} 结尾的根路径：
+ * - 去掉尾部斜杠与误填的 /chat/completions 后缀
+ * - 未带版本号时补上 /v1（如 api.openai.com → https://api.openai.com/v1）
+ * 已带 /v2、/v4 等其他版本的地址保持不变
+ */
+const resolveOpenAIBase = (rawBaseUrl: string): string => {
+    let base = (rawBaseUrl || '').trim().replace(/\/+$/, '');
+    if (base.endsWith('/chat/completions')) {
+        base = base.slice(0, -'/chat/completions'.length).replace(/\/+$/, '');
+    }
+    if (!/\/v\d+$/.test(base)) {
+        base += '/v1';
+    }
+    return base;
+};
+
 /**
  * Helper to call OpenAI Compatible API
  */
 const callOpenAICompatible = async (config: AIConfig, systemPrompt: string, userPrompt: string): Promise<string> => {
     try {
-        let baseUrl = config.baseUrl.replace(/\/$/, '');
-        // If user didn't provide full path, assume /v1/chat/completions logic or just trust them
-        // Common convention: if URL ends with /v1, append /chat/completions
-        if (!baseUrl.includes('/chat/completions')) {
-            if (baseUrl.endsWith('/v1')) {
-                baseUrl += '/chat/completions';
-            } else {
-                // If it's just a domain like api.openai.com, usually implies /v1/chat/completions
-                // But let's assume user might input full path or standard base. 
-                // To be safe, let's append /chat/completions if not present
-                baseUrl += '/chat/completions';
-            }
-        }
+        const baseUrl = `${resolveOpenAIBase(config.baseUrl)}/chat/completions`;
 
-        const response = await fetch(baseUrl, {
+        const response = await fetchWithTimeout(baseUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -70,24 +91,19 @@ export const testAIConnection = async (config: AIConfig): Promise<AIConnectionTe
     if (config.provider === 'gemini') {
       const ai = new GoogleGenAI({ apiKey: config.apiKey });
       const modelName = config.model || 'gemini-2.5-flash';
-      await ai.models.generateContent({
+      await withTimeout(ai.models.generateContent({
         model: modelName,
         contents: 'ping',
-      });
+      }));
       return { ok: true, message: `连接成功，模型 ${modelName} 可用` };
     }
 
     // OpenAI Compatible: resolve base url the same way as callOpenAICompatible
-    let base = config.baseUrl.replace(/\/$/, '');
-    if (base.includes('/chat/completions')) {
-      base = base.replace(/\/chat\/completions$/, '');
-    } else if (!base.endsWith('/v1')) {
-      base += '/v1';
-    }
+    const base = resolveOpenAIBase(config.baseUrl);
 
     // Try listing models first
     try {
-      const res = await fetch(`${base}/models`, {
+      const res = await fetchWithTimeout(`${base}/models`, {
         headers: { 'Authorization': `Bearer ${config.apiKey}` }
       });
       if (res.ok) {
@@ -117,7 +133,7 @@ export const testAIConnection = async (config: AIConfig): Promise<AIConnectionTe
     }
 
     // Fallback: minimal chat completion
-    const res = await fetch(`${base}/chat/completions`, {
+    const res = await fetchWithTimeout(`${base}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -160,10 +176,10 @@ export const generateLinkDescription = async (title: string, url: string, config
         // Use user defined model or fallback
         const modelName = config.model || 'gemini-2.5-flash';
         
-        const response: GenerateContentResponse = await ai.models.generateContent({
+        const response: GenerateContentResponse = await withTimeout(ai.models.generateContent({
             model: modelName,
             contents: `I have a website bookmark. ${prompt}`,
-        });
+        }));
         return response.text ? response.text.trim() : "无法生成描述";
     } else {
         // OpenAI Compatible
@@ -201,10 +217,10 @@ export const suggestCategory = async (title: string, url: string, categories: {i
             const ai = new GoogleGenAI({ apiKey: config.apiKey });
             const modelName = config.model || 'gemini-2.5-flash';
             
-            const response: GenerateContentResponse = await ai.models.generateContent({
+            const response: GenerateContentResponse = await withTimeout(ai.models.generateContent({
                 model: modelName,
                 contents: `Task: Categorize this website.\n${prompt}`,
-            });
+            }));
             return response.text ? response.text.trim() : null;
         } else {
              // OpenAI Compatible

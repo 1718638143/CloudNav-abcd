@@ -40,7 +40,7 @@ const SearchConfigModal: React.FC<SearchConfigModalProps> = ({
     }
     
     const source: ExternalSearchSource = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       name: newSource.name!,
       url: newSource.url!,
       icon: newSource.icon || 'Globe',

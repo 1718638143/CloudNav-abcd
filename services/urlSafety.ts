@@ -1,4 +1,4 @@
-import type { ExternalSearchSource, SearchConfig, SearchMode } from '../types';
+import type { ExternalSearchSource, SearchConfig, SearchMode, AIConfig } from '../types';
 
 const ALLOWED_BOOKMARK_PROTOCOLS = new Set(['http:', 'https:']);
 
@@ -56,4 +56,31 @@ export const sanitizeSearchConfig = (value: unknown): SearchConfig | null => {
     : null;
 
   return { mode, externalSources, selectedSource };
+};
+
+/**
+ * AI 配置白名单校验：用于导入/恢复等不可信输入通道。
+ * 防止恶意备份文件把 baseUrl 指向攻击者服务器、替换 apiKey 后静默接管 AI 请求。
+ */
+export const sanitizeAIConfig = (value: unknown): AIConfig | null => {
+  if (!value || typeof value !== 'object') return null;
+
+  const candidate = value as Partial<AIConfig>;
+  if (
+    (candidate.provider !== 'gemini' && candidate.provider !== 'openai') ||
+    typeof candidate.apiKey !== 'string' ||
+    typeof candidate.model !== 'string' ||
+    typeof candidate.baseUrl !== 'string' ||
+    !isSafeBookmarkUrl(candidate.baseUrl)
+  ) {
+    return null;
+  }
+
+  return {
+    ...candidate,
+    provider: candidate.provider,
+    apiKey: candidate.apiKey,
+    baseUrl: candidate.baseUrl.trim(),
+    model: candidate.model,
+  } as AIConfig;
 };

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Lock, ArrowRight, Loader2, X } from 'lucide-react';
 import { Category } from '../types';
+import { verifyCategoryPassword } from '../services/categoryPassword';
 
 interface CategoryAuthModalProps {
   isOpen: boolean;
@@ -12,18 +13,29 @@ interface CategoryAuthModalProps {
 const CategoryAuthModal: React.FC<CategoryAuthModalProps> = ({ isOpen, onClose, category, onUnlock }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [verifying, setVerifying] = useState(false);
 
   if (!isOpen || !category) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === category.password) {
-        onUnlock(category.id);
-        setPassword('');
-        setError('');
-        onClose();
-    } else {
-        setError('密码错误');
+    if (verifying) return;
+    setVerifying(true);
+    try {
+        // 密码存储值为 PBKDF2 哈希（旧数据兼容明文比对），不再明文比对原始密码
+        const ok = await verifyCategoryPassword(password, category.password);
+        if (ok) {
+            onUnlock(category.id);
+            setPassword('');
+            setError('');
+            onClose();
+        } else {
+            setError('密码错误');
+        }
+    } catch {
+        setError('验证失败，请重试');
+    } finally {
+        setVerifying(false);
     }
   };
 
@@ -64,7 +76,7 @@ const CategoryAuthModal: React.FC<CategoryAuthModalProps> = ({ isOpen, onClose, 
 
           <button
             type="submit"
-            disabled={!password}
+            disabled={!password || verifying}
             className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-4 rounded-xl transition-colors shadow-lg shadow-amber-500/30 flex items-center justify-center gap-2"
           >
             解锁 <ArrowRight size={18} />

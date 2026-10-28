@@ -1,4 +1,4 @@
-import { getExpiryDays, readExpiryDays, signToken, verifyAuthToken } from './auth';
+import { getExpiryDays, readExpiryDays, signToken, timingSafeEqual, verifyAuthToken } from './auth';
 
 interface Env {
   CLOUDNAV_KV: any;
@@ -27,6 +27,8 @@ const corsHeaders = (request: Request) => {
   return {
     ...(origin ? { 'Access-Control-Allow-Origin': origin, 'Vary': 'Origin' } : {}),
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    // 敏感接口（书签数据/AI 配置含密钥）禁止中间层与浏览器缓存
+    'Cache-Control': 'no-store',
     'Access-Control-Allow-Headers': 'Content-Type, x-auth-password',
   };
 };
@@ -41,6 +43,29 @@ const getRequireLoginAccess = async (env: Env): Promise<boolean> => {
     }
   } catch (e) {}
   return true;
+};
+
+// 基础防爆破：单隔离实例内存级滑动窗口（跨实例不共享，生产建议叠加 Cloudflare WAF 速率限制规则）
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+const AUTH_RATE_LIMIT = 10;
+const AUTH_RATE_WINDOW = 60_000;
+
+const getClientIp = (request: Request): string =>
+  request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || 'unknown';
+
+const isAuthRateLimited = (request: Request): boolean => {
+  const now = Date.now();
+  const entry = authAttempts.get(getClientIp(request));
+  if (!entry || entry.resetAt <= now) return false;
+  return entry.count >= AUTH_RATE_LIMIT;
+};
+
+const recordAuthFailure = (request: Request): void => {
+  const now = Date.now();
+  const ip = getClientIp(request);
+  const entry = authAttempts.get(ip);
+  if (entry && entry.resetAt > now) entry.count += 1;
+  else authAttempts.set(ip, { count: 1, resetAt: now + AUTH_RATE_WINDOW });
 };
 
 const unauthorized = (request: Request, message: string) => new Response(JSON.stringify({ error: message }), {
@@ -205,15 +230,16 @@ export const onRequestGet = async (context: { env: Env; request: Request }) => {
     }
     
     if (!data) {
-      // 如果没有数据，返回空结构
-      return new Response(JSON.stringify({ links: [], categories: [] }), {
+      // 如果没有数据，返回空结构（revision 供客户端乐观并发控制使用）
+      return new Response(JSON.stringify({ links: [], categories: [], revision: 0 }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
 
     // 未通过密码验证时：过滤带密码（隐私）分类的链接，并剥离分类的密码字段，
-    // 防止抓包直接读到受保护分类的链接数据
-    if (url.searchParams.get('getConfig') !== 'true' && !verified) {
+    // 防止抓包直接读到受保护分类的链接数据。
+    // 注意：这里不接受任何参数绕过——旧的 getConfig=true 旁路会让未登录者拿到含明文分类密码的完整数据，已移除。
+    if (!verified) {
       try {
         const parsed = JSON.parse(data);
         const lockedIds = new Set(
@@ -269,6 +295,14 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
   const serverPassword = env.PASSWORD;
 
   try {
+    // 请求体大小防护：KV 单值上限 25MB，超出直接拒绝，避免在鉴权前被超大 JSON 消耗 CPU
+    const contentLength = Number(request.headers.get('Content-Length') || 0);
+    if (Number.isFinite(contentLength) && contentLength > 26 * 1024 * 1024) {
+      return new Response(JSON.stringify({ error: 'Payload too large' }), {
+        status: 413,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      });
+    }
     const body = await request.json();
     
     // 只验证密码：通过后签发独立的签名令牌，不再写入全局 last_auth_time
@@ -280,12 +314,23 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         });
       }
       
-      if (providedPassword !== serverPassword) {
+      // 防爆破：失败次数限速
+      if (isAuthRateLimited(request)) {
+        return new Response(JSON.stringify({ error: '尝试次数过多，请稍后再试' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
+      }
+      
+      // 常数时间比较，避免时序侧信道逐位猜测口令
+      if (!providedPassword || !timingSafeEqual(providedPassword, serverPassword)) {
+        recordAuthFailure(request);
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
+      authAttempts.delete(getClientIp(request));
       
       const token = await signToken(env, Date.now());
       return new Response(JSON.stringify({ success: true, token }), {
@@ -428,9 +473,29 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
-    await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: body.links, categories: body.categories }));
 
-    return new Response(JSON.stringify({ success: true }), {
+    // 乐观并发控制：客户端携带读取时的 revision，与服务端不一致说明期间被其他设备/标签页修改过，
+    // 返回 409 让客户端刷新合并，而不是静默 last-write-wins 互相覆盖
+    let currentData: any = {};
+    try {
+      const currentStr = await env.CLOUDNAV_KV.get('app_data');
+      currentData = currentStr ? JSON.parse(currentStr) : {};
+    } catch (e) { currentData = {}; }
+    const currentRevision = Number(currentData.revision) || 0;
+    if (body.baseRevision !== undefined && body.baseRevision !== null) {
+      const baseRevision = Number(body.baseRevision);
+      if (Number.isFinite(baseRevision) && baseRevision !== currentRevision) {
+        return new Response(JSON.stringify({ error: 'conflict', message: '数据已在其他设备或标签页被修改', latestRevision: currentRevision }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
+      }
+    }
+
+    const newRevision = Date.now();
+    await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: body.links, categories: body.categories, revision: newRevision }));
+
+    return new Response(JSON.stringify({ success: true, revision: newRevision }), {
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });
   } catch (err) {

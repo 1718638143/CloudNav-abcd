@@ -12,9 +12,10 @@ interface LinkModalProps {
   initialData?: LinkItem;
   aiConfig: AIConfig;
   defaultCategoryId?: string;
+  authToken?: string | null;
 }
 
-const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete, categories, initialData, aiConfig, defaultCategoryId }) => {
+const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete, categories, initialData, aiConfig, defaultCategoryId, authToken }) => {
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
   const [description, setDescription] = useState('');
@@ -94,8 +95,7 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
         domain = urlObj.hostname;
       }
       
-      // 将自定义图标保存到KV缓存
-      const authToken = localStorage.getItem('cloudnav_auth_token');
+      // 将自定义图标保存到KV缓存（认证令牌由父组件通过 props 传入，不绕过组件边界直接读 localStorage）
       if (authToken) {
         await fetch('/api/storage', {
           method: 'POST',
@@ -178,7 +178,11 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
         const [desc, cat] = await Promise.all([descPromise, catPromise]);
         
         if (desc) setDescription(desc);
-        if (cat) setCategoryId(cat);
+        // AI 返回的分类 ID 不可信：去除引号/空白后必须真实存在，否则链接会落进不存在的分类
+        const suggestedId = (cat || '').trim().replace(/^["']+|["']+$/g, '');
+        if (suggestedId && categories.some(c => c.id === suggestedId)) {
+            setCategoryId(suggestedId);
+        }
         
     } catch (e) {
         console.error("AI Assist failed", e);
