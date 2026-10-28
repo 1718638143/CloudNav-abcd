@@ -236,8 +236,9 @@ function App() {
   const [selectedLinks, setSelectedLinks] = useState<Set<string>>(new Set()); // 选中的链接ID集合
   
   // Sub-category State
-  const [hoveredCategory, setHoveredCategory] = useState<string | null>(null); // 当前悬浮的一级分类ID
-  const [hoveredCategoryTop, setHoveredCategoryTop] = useState<number>(0); // 当前悬浮的一级分类的垂直位置
+    const [hoveredCategory, setHoveredCategory] = useState<string | null>(null); // 当前悬浮的一级分类ID
+  const [hoveredCategoryTop, setHoveredCategoryTop] = useState<number>(0); // 当前悬浮的一级分类的垂直位置 
+  const [pinnedRailCategory, setPinnedRailCategory] = useState<string | null>(null); // 图标栏模式下点击固定弹出的子分类菜单
   
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -2272,15 +2273,20 @@ function App() {
       {/* Sidebar */}
       <aside 
         className={`
-          fixed lg:relative inset-y-0 left-0 z-50 w-64 transform transition-all duration-300 ease-in-out
+          fixed lg:relative inset-y-0 left-0 z-50 w-64 transform transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]
           bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-          ${isSidebarCollapsed ? 'lg:-ml-64' : 'lg:translate-x-0'}
+          ${isSidebarCollapsed ? 'lg:w-16' : 'lg:w-64'} lg:translate-x-0
         `}
       >
         {/* Logo */}
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-100 dark:border-slate-700 shrink-0">
-            <span className="text-xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
+        <div 
+          className={`h-16 flex items-center justify-between border-b border-slate-100 dark:border-slate-700 shrink-0 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] px-6 ${
+            isSidebarCollapsed ? 'lg:px-[17px]' : ''
+          }`}>
+            <span className={`text-xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent whitespace-nowrap truncate min-w-0 max-w-[200px] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+              isSidebarCollapsed ? 'lg:max-w-0 lg:opacity-0' : 'delay-100'
+            }`}>
               {siteSettings.navTitle || 'CloudNav'}
             </span>
             <>
@@ -2292,12 +2298,15 @@ function App() {
                 <X size={20} />
               </button>
 
+              {/* 桌面端：展开/收起按钮（收起后保留在图标栏顶部） */}
               <button 
-                onClick={() => setIsSidebarCollapsed(true)}
-                className="hidden lg:flex p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
-                title="收起侧边栏"
+                onClick={() => { setIsSidebarCollapsed(!isSidebarCollapsed); setPinnedRailCategory(null); }}
+                className={`p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors ${
+                  isSidebarCollapsed ? 'hidden lg:flex' : 'hidden lg:flex'
+                }`}
+                title={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
               >
-                <PanelLeftClose size={18} />
+                {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
               </button>
             </>
         </div>
@@ -2305,29 +2314,33 @@ function App() {
         {/* Categories List */}
         <div 
           className="flex-1 overflow-y-auto py-4 space-y-1 scrollbar-hide"
-          onScroll={() => setHoveredCategory(null)}
+          onScroll={() => { setHoveredCategory(null); setPinnedRailCategory(null); }}
         >
             <div className="px-4">
               <button
-                onClick={() => { setSelectedCategory('all'); setSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                onClick={() => { setSelectedCategory('all'); setSidebarOpen(false); setPinnedRailCategory(null); }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] whitespace-nowrap ${
+                  isSidebarCollapsed ? 'lg:px-[2px]' : ''
+                } ${
                   selectedCategory === 'all' 
                     ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
                     : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
                 }`}
               >
-                <div className="p-1"><Icon name="LayoutGrid" size={18} /></div>
-                <span>置顶网站</span>
+                <div className={`p-1 shrink-0`}><Icon name="LayoutGrid" size={18} /></div>
+                <span className={`truncate min-w-0 max-w-[120px] transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+                  isSidebarCollapsed ? 'lg:max-w-0 lg:opacity-0' : 'delay-100'
+                }`}>置顶网站</span>
               </button>
             </div>
             
             <div className="flex items-center justify-between pt-4 pb-2 px-8">
-               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">分类目录</span>
+               <span className={`text-xs font-semibold text-slate-400 uppercase tracking-wider truncate min-w-0 max-w-[120px] transition-all duration-200 ${isSidebarCollapsed ? 'lg:max-w-0 lg:opacity-0 lg:pointer-events-none' : 'delay-100'}`}>分类目录</span>
                <button 
                   onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsCatManagerOpen(true); }}
                   onPointerEnter={loadCategoryManagerModal}
                   onFocus={loadCategoryManagerModal}
-                  className="p-1 text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded"
+                  className={`p-1 text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-all duration-200 ${isSidebarCollapsed ? 'lg:opacity-0 lg:pointer-events-none' : ''}`}
                   title="管理分类"
                >
                   <Settings size={14} />
@@ -2348,8 +2361,18 @@ function App() {
                     onMouseLeave={() => setHoveredCategory(null)}
                   >
                     <button
-                      onClick={() => handleCategoryClick(cat)}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all group ${
+                      onClick={() => {
+                        handleCategoryClick(cat);
+                        // 图标栏模式下：有子分类时点击固定展开子分类菜单，再次点击切换关闭
+                        if (isSidebarCollapsed && subCats.length > 0 && !isLocked) {
+                          setPinnedRailCategory(prev => prev === cat.id ? null : cat.id);
+                        } else {
+                          setPinnedRailCategory(null);
+                        }
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] group whitespace-nowrap ${
+                        isSidebarCollapsed ? 'lg:px-[2px]' : ''
+                      } ${
                         selectedCategory === cat.id || (subCats.some(sc => sc.id === selectedCategory))
                           ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
                           : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
@@ -2358,20 +2381,22 @@ function App() {
                       <div className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${selectedCategory === cat.id ? 'bg-blue-100 dark:bg-blue-800' : 'bg-slate-100 dark:bg-slate-800'}`}>
                         {isLocked ? <Lock size={16} className="text-amber-500" /> : <Icon name={cat.icon} size={16} />}
                       </div>
-                      <span className="truncate flex-1 text-left">{cat.name}</span>
-                      {(selectedCategory === cat.id || subCats.some(sc => sc.id === selectedCategory)) && <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>}
+                      <span className={`truncate flex-1 min-w-0 max-w-[200px] text-left transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+                        isSidebarCollapsed ? 'lg:max-w-0 lg:opacity-0' : 'delay-100'
+                      }`}>{cat.name}</span>
+                      {(selectedCategory === cat.id || subCats.some(sc => sc.id === selectedCategory)) && <div className={`w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0 transition-opacity duration-200 ${isSidebarCollapsed ? 'lg:opacity-0' : ''}`}></div>}
                       {subCats.length > 0 && (
-                        <div className="text-slate-400 group-hover:text-blue-500 transition-colors">
+                        <div className={`text-slate-400 group-hover:text-blue-500 transition-all duration-200 ${isSidebarCollapsed ? 'lg:opacity-0' : ''}`}>
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                         </div>
                       )}
                     </button>
 
                     {/* 二级分类悬浮菜单（加密分类未解锁时不显示，避免泄露子分类名） */}
-                    {hoveredCategory === cat.id && subCats.length > 0 && !isLocked && (
+                    {(hoveredCategory === cat.id || (isSidebarCollapsed && pinnedRailCategory === cat.id)) && subCats.length > 0 && !isLocked && (
                       <div 
-                          className="fixed left-64 w-[166px] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-2 z-[60] animate-in fade-in slide-in-from-left-2 duration-200 hidden lg:block"
-                          style={{ top: hoveredCategoryTop }}
+                          className={`fixed ${isSidebarCollapsed ? 'lg:left-16' : 'lg:left-64'} w-[166px] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-2 z-[60] animate-in fade-in slide-in-from-left-2 duration-200 hidden lg:block`}
+                          style={{ top: Math.max(8, Math.min(hoveredCategoryTop, (typeof window !== 'undefined' ? window.innerHeight : 1080) - (48 + subCats.length * 37 + 14) - 8)) }}
                         >
                         {/* 增加一个透明的遮罩层，防止鼠标移动到间隙时消�?*/}
                         <div className="absolute -left-4 top-0 bottom-0 w-4 bg-transparent" />
@@ -2384,7 +2409,7 @@ function App() {
                           return (
                             <button
                               key={subCat.id}
-                              onClick={() => handleCategoryClick(subCat)}
+                              onClick={() => { handleCategoryClick(subCat); setPinnedRailCategory(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-left ${
                                 selectedCategory === subCat.id ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-600 dark:text-slate-400'
                               }`}
@@ -2402,71 +2427,79 @@ function App() {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 shrink-0">
+        <div className={`p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 shrink-0 ${isSidebarCollapsed ? 'lg:px-2' : ''}`}>
             
-            <div className="grid grid-cols-4 gap-2 mb-2">
+            <div className={`grid grid-cols-4 gap-2 mb-2 ${isSidebarCollapsed ? 'lg:grid-cols-1' : ''}`}>
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsImportModalOpen(true); }}
                     onPointerEnter={loadImportModal}
                     onFocus={loadImportModal}
-                    className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
+                    className={`flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all ${
+                      isSidebarCollapsed ? 'lg:hidden' : ''
+                    }`}
                     title="导入书签"
                 >
                     <Upload size={14} />
-                    <span>导入</span>
+                    <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>导入</span>
                 </button>
                 
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsBackupModalOpen(true); }}
                     onPointerEnter={loadBackupModal}
                     onFocus={loadBackupModal}
-                    className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
+                    className={`flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all ${
+                      isSidebarCollapsed ? 'lg:hidden' : ''
+                    }`}
                     title="备份与恢复"
                 >
                     <CloudCog size={14} />
-                    <span>备份</span>
+                    <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>备份</span>
                 </button>
 
                 <button 
                     onClick={() => setIsSettingsModalOpen(true)}
                     onPointerEnter={loadSettingsModal}
                     onFocus={loadSettingsModal}
-                    className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
+                    className={`flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all ${
+                      isSidebarCollapsed && !authToken ? 'lg:hidden' : ''
+                    }`}
                     title="AI 设置"
                 >
                     <Settings size={14} />
-                    <span>设置</span>
+                    <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>设置</span>
                 </button>
 
                 <button 
                     onClick={() => setIsLinkCheckModalOpen(true)}
                     onPointerEnter={loadLinkCheckModal}
                     onFocus={loadLinkCheckModal}
-                    className="flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all"
+                    className={`flex flex-col items-center justify-center gap-1 p-2 text-xs text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 transition-all ${
+                      isSidebarCollapsed ? 'lg:hidden' : ''
+                    }`}
                     title="批量检测链接可用性"
                 >
                     <Activity size={14} />
-                    <span>检测</span>
+                    <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>检测</span>
                 </button>
             </div>
             
-            <div className="flex items-center justify-between text-xs px-2 mt-2">
+            <div className={`flex items-center justify-between text-xs px-2 mt-2 ${isSidebarCollapsed ? 'lg:flex-col lg:items-center lg:gap-1.5' : ''}`}>
                <div className="flex items-center gap-1 text-slate-400">
                  {syncStatus === 'saving' && <Loader2 className="animate-spin w-3 h-3 text-blue-500" />}
                  {syncStatus === 'saved' && <CheckCircle2 className="w-3 h-3 text-green-500" />}
                  {syncStatus === 'error' && <AlertCircle className="w-3 h-3 text-red-500" />}
-                 {authToken ? <span className="text-green-600">已同步</span> : <span className="text-amber-500">离线</span>}
+                 <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>{authToken ? <span className="text-green-600">已同步</span> : <span className="text-amber-500">离线</span>}</span>
                </div>
 
                <a 
                  href={GITHUB_REPO_URL} 
                  target="_blank" 
                  rel="noopener noreferrer"
-                 className="flex items-center gap-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                 className={`flex items-center gap-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors ${isSidebarCollapsed ? 'lg:hidden' : ''}`}
                  title="Fork this project on GitHub"
                >
                  <GitFork size={14} />
-                 <span>Fork 项目 v1.8.2</span>
+                 <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>Fork 项目 v1.8.2</span>
                </a>
             </div>
         </div>
@@ -2481,17 +2514,6 @@ function App() {
             <button onClick={() => setSidebarOpen(true)} className="p-2 -ml-2 text-slate-600 dark:text-slate-300 lg:hidden">
               <Menu size={24} />
             </button>
-
-            {/* 桌面端：侧边栏收起后显示展开按钮 */}
-            {isSidebarCollapsed && (
-              <button 
-                onClick={() => setIsSidebarCollapsed(false)} 
-                className="hidden lg:flex p-2 -ml-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
-                title="显示侧边栏"
-              >
-                <PanelLeftOpen size={22} />
-              </button>
-            )}
 
             {/* 搜索模式切换 + 搜索�?*/}
             <div className="flex items-center gap-3 flex-1 min-w-0">
