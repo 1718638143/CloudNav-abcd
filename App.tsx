@@ -2549,7 +2549,7 @@ function App() {
                 } ${
                   selectedCategory === 'all' 
                     ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:shadow-md dark:hover:shadow-black/20'
                 }`}
               >
                 <div className={`p-1 shrink-0`}><Icon name="LayoutGrid" size={18} /></div>
@@ -2600,7 +2600,7 @@ function App() {
                       } ${
                         selectedCategory === cat.id || (subCats.some(sc => sc.id === selectedCategory))
                           ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
-                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 hover:shadow-md hover:shadow-slate-200/70 dark:hover:bg-slate-700 dark:hover:shadow-black/20'
                       }`}
                     >
                       <div className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${selectedCategory === cat.id ? 'bg-blue-100 dark:bg-blue-800' : 'bg-slate-100 dark:bg-slate-800'}`}>
@@ -2635,7 +2635,7 @@ function App() {
                             <button
                               key={subCat.id}
                               onClick={() => { handleCategoryClick(subCat); setPinnedRailCategory(null); }}
-                              className={`w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-left ${
+                              className={`w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-left ${
                                 selectedCategory === subCat.id ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-slate-600 dark:text-slate-400'
                               }`}
                             >
