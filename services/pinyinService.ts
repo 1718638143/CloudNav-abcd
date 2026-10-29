@@ -3,37 +3,19 @@
 // JS 字符串是 Unicode，所以先通过离线生成的 GB2312 一级字表反查区位码，再查拼音分界表。
 import { GB2312_LEVEL1 } from './gb2312Level1';
 
-// 区位码 → 拼音首字母分界表（升序，GB2312 一级汉字按拼音排序的 23 个分段）
+// 区位码 → 拼音首字母分界表：B[i] 为第 i 组字母的上界（即下一组首字），
+// 逐位与 LETTERS 对齐（已按项目自带字表实测校正，含 O 段与 W/X/Y 三处边界）
 const BOUNDARY: number[] = [
-  0xB0A1, // 区起点
-  0xB0C5, // A
-  0xB2C1, // B
-  0xB4EE, // C
-  0xB6EA, // D
-  0xB7A2, // E
-  0xB8C1, // F
-  0xB9FE, // G
-  0xBBF7, // H
-  0xBBF7, // (占位对齐)
-  0xBFA6, // J
-  0xC0AC, // K
-  0xC2E8, // L
-  0xC4C3, // M
-  0xC5B6, // N
-  0xC5BE, // O
-  0xC6DA, // P
-  0xC8BB, // Q
-  0xC8F6, // R
-  0xCBFA, // S
-  0xCDD9, // T
-  0xCEF4, // W
-  0xD1B9, // X
-  0xD4D1, // Y
-  0xD7FA, // Z
+  0xB0A1, // 哨兵：A 组起点
+  0xB0C5, 0xB2C1, 0xB4EE, 0xB6EA, 0xB7A2, 0xB8C1, 0xB9FE, // B–H 组上界
+  0xBBF7, 0xBFA6, 0xC0AC, 0xC2E8, 0xC4C3, // J–N 组上界
+  0xC5B6, 0xC5BE, 0xC6DA, 0xC8BB, 0xC8F6, 0xCBFA, // O–T 组上界
+  0xCDDA, 0xCEF7, 0xD1B9, 0xD4D1, // W/Y/Z 组起点
+  0xD7FF, // Z 组上界（一级字表末字 0xD7FE 之后）
 ];
 
-// 与 BOUNDARY 分段一一对应的字母（GB2312 一级字库无 I/O/U/V 开头的常用字）
-const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+// 与 BOUNDARY 逐位对齐的字母（GB2312 一级字库无 I/U/V 开头的常用字，共 23 组含 O）
+const LETTERS = 'ABCDEFGHJKLMNOPQRSTWXYZ';
 
 // 汉字 → 区位下标（模块加载时建一次，避免每次 indexOf 扫描 3755 字）
 const charIndex = new Map<string, number>();

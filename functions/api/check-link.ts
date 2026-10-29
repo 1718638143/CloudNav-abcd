@@ -80,7 +80,9 @@ const isPrivateTarget = (rawHost: string): boolean => {
     return false;
   }
 
-  if (/^[0-9.]+$/.test(host) && host.includes('.')) {
+  // 段级十进制/八进制/十六进制混合写法（如 0x7f.0.0.1）也按 IPv4 归一化判断，
+  // normalizeIPv4 本身支持这三种段格式，此前外层守卫只放行纯数字点分导致绕过
+  if (/^(0[xX][0-9a-fA-F]+|0[0-7]*|\d+)(\.(0[xX][0-9a-fA-F]+|0[0-7]*|\d+)){0,3}$/.test(host) && host.includes('.')) {
     const nums = normalizeIPv4(host);
     if (nums) return isPrivateIPv4(nums);
   }

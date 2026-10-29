@@ -135,13 +135,15 @@ const CategoryDeleteModal: React.FC<CategoryDeleteModalProps> = ({
           </button>
           <button
             onClick={() => onConfirm(mode, targetCategoryId)}
+            // 迁移模式下必须有可用目标分类（可用分类为空时迁入空串会让链接无归属）
+            disabled={mode === 'migrate' && !targetCategoryId}
             className={`px-6 py-2.5 rounded-xl text-white font-medium transition-all shadow-lg ${
               mode === 'delete_all' 
                 ? 'bg-red-600 hover:bg-red-700 shadow-red-500/30' 
                 : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'
-            }`}
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            确认删除
+            {mode === 'migrate' && !targetCategoryId ? '无可用目标分类' : '确认删除'}
           </button>
         </div>
       </div>

@@ -207,8 +207,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         setBkMsg('请先登录后再恢复备份。');
         return;
     }
-    const timeStr = new Date(file.createdAt).toLocaleString('zh-CN');
-    if (!confirm(`确定要恢复 ${timeStr} 的备份吗？这将覆盖当前的本地数据。`)) return;
+    const dTime = new Date(file.createdAt);
+const timeStr = isNaN(dTime.getTime()) ? '未知时间' : dTime.toLocaleString('zh-CN');
+if (!confirm(`确定要恢复 ${timeStr} 的备份吗？这将覆盖当前的本地数据。`)) return;
     setRestoringFile(file.id);
     setBkStatus('busy');
     setBkMsg('正在下载并恢复...');
@@ -346,7 +347,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       minimum_chrome_version: string;
       description: string;
       permissions: string[];
-      background: { service_worker: string };
+      background: { service_worker?: string; scripts?: string[] };
       action: { default_title: string };
       side_panel: { default_path: string };
       icons: Record<string, string>;
@@ -364,9 +365,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         minimum_chrome_version: "116",
         description: "CloudNav - 极速侧边栏与智能收藏",
         permissions: ["activeTab", "scripting", "sidePanel", "storage", "favicon", "contextMenus", "notifications", "tabs"],
-        background: {
-            service_worker: "background.js"
-        },
+        // Firefox MV3 只认 background.scripts（service_worker 是 Chrome 专属，
+        // 用错的话 Firefox 不会注册后台脚本，右键菜单/快捷键全部失效）
+        background: browserType === 'firefox'
+            ? { scripts: ["background.js"] }
+            : { service_worker: "background.js" },
         action: {
             default_title: "打开侧边栏 (Ctrl+Shift+E)"
         },
@@ -414,7 +417,10 @@ let linkCache = [];
 let categoryCache = [];
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+  // Firefox 无 sidePanel API（undefined），不判空会在 onInstalled 里直接抛 TypeError
+  if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+  }
   refreshCache().then(buildMenus);
 });
 
@@ -654,7 +660,7 @@ function notify(title, message) {
         .search-input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--hover); color: var(--text); outline: none; box-sizing: border-box; font-size: 13px; }
         .search-input:focus { border-color: var(--accent); }
         
-        .refresh-btn { width: 30px; display: flex; items-center; justify-content: center; border: 1px solid var(--border); background: var(--hover); border-radius: 6px; color: var(--muted); cursor: pointer; transition: all 0.2s; }
+        .refresh-btn { width: 30px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--hover); border-radius: 6px; color: var(--muted); cursor: pointer; transition: all 0.2s; }
         .refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
         .refresh-btn:active { transform: scale(0.95); }
         .rotating { animation: spin 1s linear infinite; }
@@ -664,7 +670,7 @@ function notify(title, message) {
         .cat-group { margin-bottom: 2px; }
         .cat-header { 
             padding: 8px 10px; font-size: 13px; font-weight: 600; color: var(--text); 
-            cursor: pointer; display: flex; items-center; gap: 8px; border-radius: 6px;
+            cursor: pointer; display: flex; align-items: center; gap: 8px; border-radius: 6px;
             user-select: none; transition: background 0.1s;
         }
         .cat-header:hover { background: var(--hover); }
@@ -679,13 +685,13 @@ function notify(title, message) {
         .sub-cat-group { margin-top: 8px; margin-bottom: 4px; }
         .sub-cat-title { 
             padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--muted); 
-            text-transform: uppercase; letter-spacing: 0.05em; display: flex; items-center; gap: 4px;
+            text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 4px;
         }
         .sub-cat-title::before { content: ""; width: 4px; height: 4px; background: var(--accent); border-radius: 50%; opacity: 0.5; }
 
-        .link-item { display: flex; items-center; gap: 8px; padding: 6px 8px; border-radius: 6px; text-decoration: none; color: var(--text); transition: background 0.1s; border-left: 2px solid transparent; }
+        .link-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; text-decoration: none; color: var(--text); transition: background 0.1s; border-left: 2px solid transparent; }
         .link-item:hover { background: var(--hover); border-left-color: var(--accent); }
-        .link-icon { width: 16px; height: 16px; flex-shrink: 0; display: flex; items-center; justify-content: center; overflow: hidden; }
+        .link-icon { width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .link-icon img { width: 100%; height: 100%; object-fit: contain; }
         .link-info { min-width: 0; flex: 1; }
         .link-title { font-size: 13px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
@@ -696,8 +702,8 @@ function notify(title, message) {
         /* 密码验证模态框样式 */
         .modal-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.5); 
-            display: none; items-center; justify-content: center; z-index: 100;
-            backdrop-blur: 2px;
+            display: none; align-items: center; justify-content: center; z-index: 100;
+            backdrop-filter: blur(2px);
         }
         .modal-overlay.show { display: flex; }
         .modal-content {
@@ -1315,9 +1321,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                                         </button>
                                     </div>
                                     <div className="flex gap-2">
-                                        {generatedIcons.map((icon, idx) => (
-                                            <button 
-                                                key={idx}
+                                                    {generatedIcons.map((icon) => (
+              <button
+                key={icon}
                                                 onClick={() => handleSiteChange('favicon', icon)}
                                                 className="w-8 h-8 rounded hover:ring-2 ring-blue-500 transition-all border border-slate-100 dark:border-slate-600"
                                             >
@@ -1748,7 +1754,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                                                 className="flex-1 p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-sm outline-none font-mono"
                                                 placeholder="未登录 / 未设置"
                                             />
-                                             <button onClick={() => handleCopy(password, 'pwd')} className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:border-blue-500 rounded text-slate-600 dark:text-slate-400 transition-colors">
+                                             <button
+              onClick={() => password && handleCopy(password, 'pwd')}
+              disabled={!password}
+              title={password ? '复制密码' : '无密码可复制'}
+              className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:border-blue-500 rounded text-slate-600 dark:text-slate-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
                                                 {copiedStates['pwd'] ? <Check size={16}/> : <Copy size={16}/>}
                                             </button>
                                         </div>
@@ -1816,7 +1827,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 <div className="mt-4 mb-4">
                                     <div className="mb-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
                                         <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                                        <span><strong>安全提示：</strong>打包文件内含站点访问密码明文（background.js / sidebar.js），请妥善保管、用后删除，切勿分享或上传到公共仓库。</span>
+                                        <span><strong>安全提示：</strong>打包文件仅内含你的站点域名，不包含访问密码；扩展的登录令牌只保存在浏览器本地。尽管如此，请勿将文件分享或上传到公共仓库。</span>
                                     </div>
                                     <button 
                                         onClick={handleDownloadZip}

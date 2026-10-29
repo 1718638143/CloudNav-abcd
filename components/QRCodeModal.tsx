@@ -22,11 +22,25 @@ const QRCodeModal: React.FC<QRCodeModalProps> = ({
     return qrCodeUrl;
   };
 
-  const downloadQRCode = () => {
-    const link = document.createElement('a');
-    link.href = generateQRCode();
-    link.download = `${title.replace(/[^a-zA-Z0-9]/g, '_')}_qrcode.png`;
-    link.click();
+  const downloadQRCode = async () => {
+    // <a download> 对跨域 URL 无效（浏览器会忽略 download 并在当前页打开图片），
+    // 必须先把图片取为 blob 再用本地对象 URL 触发下载；跨域受限时退化为新标签页打开
+    const qrUrl = generateQRCode();
+    try {
+      const resp = await fetch(qrUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `${title.replace(/[^a-zA-Z0-9]/g, '_')}_qrcode.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      window.open(qrUrl, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (

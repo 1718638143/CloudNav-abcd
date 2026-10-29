@@ -150,14 +150,19 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     fresh.links = seen.has(newLink.id) ? fresh.links : [newLink, ...fresh.links];
     if (!fresh.categories.length && currentData.categories.length) fresh.categories = currentData.categories;
 
-    // 6. Save back to KV（保留并递增 revision，维持与页面整包保存的乐观并发控制兼容）
-    const nextRevision = Date.now();
+    // 6. Save back to KV：revision 取服务端当前值与当前时间的较大者 +1，保证单调递增，
+    // 避免跨 POP 读到较新 revision 时把版本号写回退；同时把新 revision 返回给调用方保持同步。
+    // 注：KV 无原子 CAS，读-改-写窗口内的并发写仍可能被覆盖（约毫秒级），
+    // 已通过落盘前重读合并把窗口压到最小
+    const freshRevision = Number(fresh.revision) || 0;
+    const nextRevision = Math.max(Date.now(), freshRevision) + 1;
     await env.CLOUDNAV_KV.put('app_data', JSON.stringify({ links: fresh.links, categories: fresh.categories, revision: nextRevision }));
 
     return new Response(JSON.stringify({ 
         success: true, 
         link: newLink,
-        categoryName: targetCatName 
+        categoryName: targetCatName,
+        revision: nextRevision
     }), {
       headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
     });

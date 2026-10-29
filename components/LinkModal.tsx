@@ -72,6 +72,15 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
   useEffect(() => {
     if (url && autoFetchIcon && !initialData) {
       const timer = setTimeout(() => {
+        // 门槛：URL 必须能解析出含点的合法域名才请求，
+        // 避免对输入到一半的"git"、"github"这类半截域名生成图标并写入 KV 垃圾缓存
+        try {
+          const candidate = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+          const host = new URL(candidate).hostname;
+          if (!host.includes('.')) return;
+        } catch {
+          return;
+        }
         handleFetchIcon();
       }, 500); // 延迟500ms执行，避免频繁请求
       
@@ -227,9 +236,9 @@ const LinkModal: React.FC<LinkModalProps> = ({ isOpen, onClose, onSave, onDelete
       const iconUrl = `https://t3.gstatic.cn/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=128&url=https://${domain}`;
       setIcon(iconUrl);
       
-      // 将图标保存到KV缓存（base64 图标不单独写 KV，避免产生大量冗余键）
+      // 将图标保存到KV缓存（base64 图标不单独写 KV，避免产生大量冗余键）；
+      // 令牌用 props 传入的 authToken，不绕过组件边界直读 localStorage
       try {
-        const authToken = localStorage.getItem('cloudnav_auth_token');
         if (authToken && !iconUrl.startsWith('data:')) {
           await fetch('/api/storage', {
             method: 'POST',

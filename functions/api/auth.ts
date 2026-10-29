@@ -23,12 +23,18 @@ export const signToken = async (env: AuthEnv, issuedAt: number): Promise<string>
   return `${issuedAt}.${hex}`;
 };
 
-export const timingSafeEqual = (left: string, right: string): boolean => {
-  if (left.length !== right.length) return false;
+export const timingSafeEqual = async (left: string, right: string): Promise<boolean> => {
+  // 先对两侧做 SHA-256 再比较：摘要等长，消除长度不等时提前返回的时序侧信道
+  // （原实现 left.length !== right.length 立即返回，可被用于探测期望令牌长度）
+  const digest = async (value: string) => crypto.subtle.digest('SHA-256', encoder.encode(value));
+  const [leftBuf, rightBuf] = await Promise.all([digest(left), digest(right)]);
+
+  const leftBytes = new Uint8Array(leftBuf);
+  const rightBytes = new Uint8Array(rightBuf);
 
   let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  for (let index = 0; index < leftBytes.length; index += 1) {
+    difference |= leftBytes[index] ^ rightBytes[index];
   }
   return difference === 0;
 };
@@ -72,7 +78,7 @@ export const verifyAuthToken = async (
   if (issuedAt > Date.now() + 60_000) return false;
 
   const expected = await signToken(env, issuedAt);
-  if (!timingSafeEqual(token, expected)) return false;
+  if (!(await timingSafeEqual(token, expected))) return false;
 
   const expiryDays = configuredExpiryDays ?? await getExpiryDays(env);
   return expiryDays === 0 || Date.now() - issuedAt <= expiryDays * 24 * 60 * 60 * 1000;

@@ -38,7 +38,7 @@ export const parseBookmarks = async (file: File): Promise<ImportResult> => {
     const newId = generateId();
     categories.push({
       id: newId,
-      name: name,
+      name: name.slice(0, 200), // 与服务端分类字段上限保持一致
       icon: 'Folder' // Default icon for imported folders
     });
     categoryMap.set(name, newId);
@@ -67,8 +67,13 @@ export const parseBookmarks = async (file: File): Promise<ImportResult> => {
             traverse(dl, folderName);
         } else if (a) {
             // It's a link
-            const title = a.textContent || a.getAttribute('href') || 'No Title';
+            // 与服务端 link.ts 的字段上限保持一致：标题截断到 200、图标 8KB，
+            // 防止恶意书签 HTML 注入超大值逼近 KV 单值上限导致整包保存失败
+            const rawTitle = a.textContent || a.getAttribute('href') || 'No Title';
+            const title = rawTitle.slice(0, 200);
             const url = a.getAttribute('href');
+            const rawIcon = a.getAttribute('icon') || undefined;
+            const icon = rawIcon && rawIcon.length <= 8192 ? rawIcon : undefined;
             
             // 仅导入可安全导航的网页协议，避免 javascript:、data: 等危险 URL 落库。
             if (isSafeBookmarkUrl(url)) {
@@ -78,7 +83,7 @@ export const parseBookmarks = async (file: File): Promise<ImportResult> => {
                     url: url.trim(),
                     categoryId: getCategoryId(currentCategoryName),
                     createdAt: Date.now(),
-                    icon: a.getAttribute('icon') || undefined
+                    icon: icon
                 });
             }
         }

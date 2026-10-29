@@ -66,12 +66,16 @@ export const sanitizeAIConfig = (value: unknown): AIConfig | null => {
   if (!value || typeof value !== 'object') return null;
 
   const candidate = value as Partial<AIConfig>;
+  // baseUrl：OpenAI 兼容通道必须是合法 http/https 地址；
+  // gemini 不使用 baseUrl，允许空串（应用默认配置即为空，否则合法配置会被误判丢弃）
+  const baseUrlOk = candidate.provider === 'gemini'
+    ? typeof candidate.baseUrl === 'string' && (candidate.baseUrl.trim() === '' || isSafeBookmarkUrl(candidate.baseUrl))
+    : isSafeBookmarkUrl(candidate.baseUrl);
   if (
     (candidate.provider !== 'gemini' && candidate.provider !== 'openai') ||
     typeof candidate.apiKey !== 'string' ||
     typeof candidate.model !== 'string' ||
-    typeof candidate.baseUrl !== 'string' ||
-    !isSafeBookmarkUrl(candidate.baseUrl)
+    !baseUrlOk
   ) {
     return null;
   }

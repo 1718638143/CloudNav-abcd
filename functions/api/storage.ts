@@ -323,7 +323,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       }
       
       // 常数时间比较，避免时序侧信道逐位猜测口令
-      if (!providedPassword || !timingSafeEqual(providedPassword, serverPassword)) {
+      if (!providedPassword || !(await timingSafeEqual(providedPassword, serverPassword))) {
         recordAuthFailure(request);
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
@@ -338,10 +338,10 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 如果是保存搜索配置（允许无密码访问，因为搜索配置不包含敏感数据）
+        // 如果是保存搜索配置（公开数据，但写入仍需登录令牌：防止匿名滥用刷写 KV）
     if (body.saveConfig === 'search') {
-      // 登录后的请求头是签名令牌，不能再和明文密码做全等比较
-      if (serverPassword && !(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
+        // 登录后的请求头是签名令牌；PASSWORD 未配置时 verifyAuthToken 恒为 false，匿名写入一并拦住
+        if (!(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -354,9 +354,9 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 如果是保存图标（需令牌校验，防止匿名滥用刷写 KV）
+        // 如果是保存图标（需令牌校验，防止匿名滥用刷写 KV；PASSWORD 未配置时同样拒绝）
     if (body.saveConfig === 'favicon') {
-      if (serverPassword && !(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
+        if (!(await verifyAuthToken(env, providedPassword, await getExpiryDays(env)))) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -402,13 +402,21 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       });
     }
     
-    // 如果是保存网站配置
+        // 如果是保存网站配置
     if (body.saveConfig === 'website') {
-      // 合并旧配置：避免前端某个入口漏传字段时把已有设置覆盖丢失
-      const oldStr = await env.CLOUDNAV_KV.get('website_config');
-      let oldConfig: any = {};
-      try { oldConfig = oldStr ? JSON.parse(oldStr) : {}; } catch (e) {}
-      const merged = { ...oldConfig, ...body.config };
+        // 合并旧配置：避免前端某个入口漏传字段时把已有设置覆盖丢失
+        const oldStr = await env.CLOUDNAV_KV.get('website_config');
+        let oldConfig: any = {};
+        if (oldStr) {
+            try { oldConfig = JSON.parse(oldStr); } catch (e) {
+                // 存量配置损坏时按空对象合并会一次覆盖丢光旧设置，必须中止
+                return new Response(JSON.stringify({ error: 'website_config 已损坏，已中止本次写入以保护现有配置' }), {
+                    status: 500,
+                    headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+                });
+            }
+        }
+        const merged = { ...oldConfig, ...body.config };
       await env.CLOUDNAV_KV.put('website_config', JSON.stringify(merged));
       return new Response(JSON.stringify({ success: true }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
@@ -424,15 +432,28 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
-      const id = `cloudnav_backup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const size = JSON.stringify(backupData).length;
-      await env.CLOUDNAV_KV.put(`backup:${id}`, JSON.stringify(backupData));
-      
-      // 更新索引并保留最近 20 份
-      const indexStr = await env.CLOUDNAV_KV.get('backup_index');
-      let index: any[] = [];
-      try { index = indexStr ? JSON.parse(indexStr) : []; } catch (e) {}
-      index.unshift({ id, createdAt: Date.now(), size, links: backupData.links.length, categories: backupData.categories.length });
+              const id = `cloudnav_backup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const size = JSON.stringify(backupData).length;
+
+        // 先读取并校验索引：损坏时按空列表覆盖会把既有备份全部孤儿化，必须中止
+        const indexStr = await env.CLOUDNAV_KV.get('backup_index');
+        let index: any[] = [];
+        if (indexStr) {
+            try {
+                index = JSON.parse(indexStr);
+            } catch (e) {
+                return new Response(JSON.stringify({ error: '备份索引已损坏，已中止本次备份以保护既有备份' }), {
+                    status: 500,
+                    headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+                });
+            }
+            if (!Array.isArray(index)) index = [];
+        }
+
+        await env.CLOUDNAV_KV.put(`backup:${id}`, JSON.stringify(backupData));
+
+        // 更新索引并保留最近 20 份
+        index.unshift({ id, createdAt: Date.now(), size, links: backupData.links.length, categories: backupData.categories.length });
       const keep = 20;
       const removed = index.splice(keep);
       await env.CLOUDNAV_KV.put('backup_index', JSON.stringify(index));
@@ -455,11 +476,22 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
           headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
-      await env.CLOUDNAV_KV.delete(`backup:${delId}`);
-      const indexStr = await env.CLOUDNAV_KV.get('backup_index');
-      let index: any[] = [];
-      try { index = indexStr ? JSON.parse(indexStr) : []; } catch (e) {}
-      index = index.filter((i) => i.id !== delId);
+              await env.CLOUDNAV_KV.delete(`backup:${delId}`);
+        const indexStr = await env.CLOUDNAV_KV.get('backup_index');
+        let index: any[] = [];
+        if (indexStr) {
+            try {
+                index = JSON.parse(indexStr);
+            } catch (e) {
+                // 索引损坏时不覆盖写回：备份实体已删，但保留损坏现场避免进一步破坏
+                return new Response(JSON.stringify({ error: '备份索引已损坏，条目已删除但索引未更新' }), {
+                    status: 500,
+                    headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+                });
+            }
+            if (!Array.isArray(index)) index = [];
+        }
+        index = index.filter((i) => i.id !== delId);
       await env.CLOUDNAV_KV.put('backup_index', JSON.stringify(index));
       return new Response(JSON.stringify({ success: true }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },

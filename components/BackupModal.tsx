@@ -26,12 +26,20 @@ const BackupModal: React.FC<BackupModalProps> = ({
   const [isListing, setIsListing] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 列表拉取失败标记：失败时不能显示"云端暂无备份"空态，避免误导用户以为备份丢失
+  const [listError, setListError] = useState(false);
 
   const handleList = async () => {
     setIsListing(true);
     const result = await listKvBackups(authToken);
     setBackupFiles(result.files || []);
-    if (result.error) setStatusMsg(result.error);
+    if (result.error) {
+      setListError(true);
+      setStatusMsg(result.error);
+      setSyncStatus('error');
+    } else {
+      setListError(false);
+    }
     setIsListing(false);
   };
 
@@ -39,6 +47,7 @@ const BackupModal: React.FC<BackupModalProps> = ({
     if (isOpen) {
         setSyncStatus('idle');
         setStatusMsg('');
+        setListError(false);
         handleList();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -69,7 +78,8 @@ const BackupModal: React.FC<BackupModalProps> = ({
         setStatusMsg('请先登录后再恢复备份。');
         return;
     }
-    const timeStr = new Date(file.createdAt).toLocaleString('zh-CN');
+    const d = new Date(file.createdAt);
+    const timeStr = isNaN(d.getTime()) ? '未知时间' : d.toLocaleString('zh-CN');
     if (!confirm(`确定要恢复 ${timeStr} 的备份吗？这将覆盖当前的本地数据。`)) return;
 
     setSyncStatus('downloading');
@@ -181,7 +191,7 @@ const BackupModal: React.FC<BackupModalProps> = ({
                     {isListing && (
                         <div className="text-sm text-slate-500 text-center p-4">正在获取备份列表...</div>
                     )}
-                    {!isListing && backupFiles.length === 0 && (
+                    {!isListing && !listError && backupFiles.length === 0 && (
                         <div className="text-sm text-slate-500 text-center p-4 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
                             云端暂无备份，点击上方「立即备份」创建第一份
                         </div>

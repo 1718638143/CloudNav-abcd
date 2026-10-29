@@ -77,7 +77,11 @@ const ImportModal: React.FC<ImportModalProps> = ({
           );
         })
         .map((link: LinkItem) => ({ ...link, url: link.url.trim() })),
-      categories: data.categories,
+      categories: Array.isArray(data.categories)
+        // categories 元素同样逐项校验：畸形文件在后续 buildCategoryPath 处会抛未捕获 TypeError
+        ? data.categories.filter((c: unknown): c is Category =>
+            !!c && typeof c === 'object' && typeof (c as Category).id === 'string' && typeof (c as Category).name === 'string')
+        : [],
       searchConfig: sanitizeSearchConfig(data.searchConfig) || undefined,
       // AI 配置含 baseUrl/apiKey，属于不可信输入：白名单校验后才允许导入，防恶意备份接管 AI 请求
       aiConfig: sanitizeAIConfig(data.aiConfig) || undefined
@@ -200,10 +204,6 @@ const ImportModal: React.FC<ImportModalProps> = ({
             categories.map(c => [buildCategoryPath(c.id), c.id])
           );
 
-          const importPathMap = new Map(
-            parsedCategories.map(c => [buildCategoryPath(c.id), c.id])
-          );
-
           // 优先ID，其次路径；允许不同父分类下同名子分类共存
           const categoriesToAdd: Category[] = parsedCategories.filter(c => {
             if (existingCategoryIds.has(c.id)) return false;
@@ -221,13 +221,11 @@ const ImportModal: React.FC<ImportModalProps> = ({
               return link;
             }
 
-            const path = importPathMap.has(
-              parsedCategories.find(c => c.id === link.categoryId)?.id || ''
-            )
-              ? buildCategoryPath(link.categoryId)
-              : '';
-
-            const matchedCategoryId = existingPathMap.get(path);
+            // 按名称路径匹配现有分类：路径一致即重映射到现有分类（保持原目录结构）。
+            // 修复：原实现用分类 uuid 去 .has() 以路径为键的 Map，恒为 false，
+            // 导致同名分类下的链接全部错入「常用推荐」。直接拿完整路径查表即可；
+            // 分类不存在时 buildCategoryPath 返回 ''，表里无空键，安全回落到「常用推荐」
+            const matchedCategoryId = existingPathMap.get(buildCategoryPath(link.categoryId));
 
             return matchedCategoryId
               ? { ...link, categoryId: matchedCategoryId }
@@ -349,12 +347,23 @@ const ImportModal: React.FC<ImportModalProps> = ({
                         </div>
                     </div>
 
-                    {newLinksCount === 0 ? (
+                    {newLinksCount === 0 && !parsedSearchConfig && !parsedAIConfig && newCategoriesCount === 0 ? (
                         <div className="flex items-center gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 rounded-lg text-sm">
                             <AlertCircle size={16} />
-                            <span>未发现新链接，所有链接已存在。</span>
+                            <span>未发现新链接、新分类或可导入的配置，所有内容均已存在。</span>
                         </div>
                     ) : (
+                        <>
+                        {newLinksCount === 0 && (
+                            <div className="flex items-center gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 rounded-lg text-sm">
+                                <AlertCircle size={16} />
+                                <span>未发现新链接，所有链接已存在；{[
+                                    newCategoriesCount > 0 ? `${newCategoriesCount} 个新分类` : null,
+                                    parsedSearchConfig ? '搜索配置' : null,
+                                    parsedAIConfig ? 'AI 配置' : null,
+                                ].filter(Boolean).join('、')} 仍会导入。</span>
+                            </div>
+                        )}
                         <div className="space-y-3">
                             <label className="text-sm font-medium dark:text-slate-300">导入方式</label>
                             
@@ -390,6 +399,7 @@ const ImportModal: React.FC<ImportModalProps> = ({
                                 </div>
                             </label>
                         </div>
+                        </>
                     )}
                 </div>
             )}
@@ -404,7 +414,7 @@ const ImportModal: React.FC<ImportModalProps> = ({
                     <button onClick={resetState} className="px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">重新选择</button>
                     <button 
                         onClick={executeImport} 
-                        disabled={newLinksCount === 0}
+                        disabled={newLinksCount === 0 && newCategoriesCount === 0 && !parsedSearchConfig && !parsedAIConfig}
                         className="px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2 font-medium"
                     >
                         <Check size={16} /> 确认导入 ({newLinksCount})

@@ -77,9 +77,9 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
         top: adjustedPosition.y
       }}
     >
-      {menuItems.map((item, index) => (
+      {menuItems.map((item) => (
         <button
-          key={index}
+          key={item.label}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
