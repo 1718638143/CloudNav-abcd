@@ -56,6 +56,7 @@ const GITHUB_REPO_URL = 'https://github.com/aabacada/CloudNav-abcd';
 const LOCAL_STORAGE_KEY = 'cloudnav_data_cache';
 const AUTH_KEY = 'cloudnav_auth_token';
 const AI_CONFIG_KEY = 'cloudnav_ai_config';
+// 游客（未登录）的搜索配置本地持久化键：登录后合并到云端并清除
 
 // 安全提取 URL 域名：非法 URL 返回空串，避免渲染期 new URL() 抛异常导致整页白屏
 const safeHost = (url: string | undefined | null): string => {
@@ -173,10 +174,9 @@ function App() {
   const dataSanitizedRef = useRef(false);
   // 服务端 app_data 的版本号：用于乐观并发控制（保存时携带 baseRevision，被其他端修改过则 409）
   const dataRevisionRef = useRef<number>(0);
-  // "未登录时搜索配置只在本地生效"的提醒只弹一次
-  const searchPersistNoticeShown = useRef(false);
+  const SEARCH_CONFIG_KEY = 'cloudnav_search_config';
 
-  // 分批渲染：主列表每批渲染条数，避免上千书签一次性全部渲染导致卡顿
+// 分批渲染：主列表每批渲染条数，避免上千书签一次性全部渲染导致卡顿
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   // 其他目录搜索结果同样分批渲染，避免全库搜索时一次性渲染上千张卡片
   const [otherResultsVisibleCount, setOtherResultsVisibleCount] = useState(PAGE_SIZE);
@@ -862,17 +862,36 @@ function App() {
         }
         
         // 无论是否有云端数据，都尝试从KV空间加载搜索配置和网站配置
+        // 未登录（游客）时优先读本地保存的搜索配置：游客自有配置不会被云端公开配置覆盖
         let searchConfigLoaded = false;
+        if (!savedToken) {
+            try {
+                const localRaw = localStorage.getItem(SEARCH_CONFIG_KEY);
+                if (localRaw) {
+                    const safeSearchConfig = sanitizeSearchConfig(JSON.parse(localRaw));
+                    if (safeSearchConfig) {
+                        setSearchMode(safeSearchConfig.mode);
+                        setExternalSearchSources(safeSearchConfig.externalSources);
+                        setSelectedSearchSource(safeSearchConfig.selectedSource ?? null);
+                        searchConfigLoaded = true;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to load local search config.', e);
+            }
+        }
         try {
-            const searchConfigRes = await fetch('/api/storage?getConfig=search');
-            if (searchConfigRes.ok) {
-                const searchConfigData = await searchConfigRes.json();
-                const safeSearchConfig = sanitizeSearchConfig(searchConfigData);
-                if (safeSearchConfig) {
-                    setSearchMode(safeSearchConfig.mode);
-                    setExternalSearchSources(safeSearchConfig.externalSources);
-                    setSelectedSearchSource(safeSearchConfig.selectedSource ?? null);
-                    searchConfigLoaded = true;
+            if (!searchConfigLoaded) {
+                const searchConfigRes = await fetch('/api/storage?getConfig=search');
+                if (searchConfigRes.ok) {
+                    const searchConfigData = await searchConfigRes.json();
+                    const safeSearchConfig = sanitizeSearchConfig(searchConfigData);
+                    if (safeSearchConfig) {
+                        setSearchMode(safeSearchConfig.mode);
+                        setExternalSearchSources(safeSearchConfig.externalSources);
+                        setSelectedSearchSource(safeSearchConfig.selectedSource ?? null);
+                        searchConfigLoaded = true;
+                    }
                 }
             }
             
@@ -1155,6 +1174,32 @@ function App() {
             }
             setIsAuthOpen(false);
             updateSyncStatus('saved');
+            
+            // 登录成功：把游客期间本地保存的搜索配置上传到云端，之后以云端为准
+            try {
+                const localRaw = localStorage.getItem(SEARCH_CONFIG_KEY);
+                if (localRaw) {
+                    const localConfig = sanitizeSearchConfig(JSON.parse(localRaw));
+                    if (localConfig) {
+                        const mergeRes = await fetch('/api/storage', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-auth-password': sessionToken
+                            },
+                            body: JSON.stringify({ saveConfig: 'search', config: localConfig })
+                        });
+                        // 上传成功才清除本地键；失败则保留，下次登录再试
+                        if (mergeRes.ok) {
+                            localStorage.removeItem(SEARCH_CONFIG_KEY);
+                        }
+                    } else {
+                        localStorage.removeItem(SEARCH_CONFIG_KEY);
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to merge local search config to cloud.', e);
+            }
             
             // 登录成功后，获取网站配置（包括密码过期时间设置）
             try {
@@ -1828,20 +1873,24 @@ function App() {
           setSelectedSearchSource(safeSelectedSource);
       }
       
-      // 只保存到KV空间（搜索配置允许无密码访问）
-      try {
-          const headers: Record<string, string> = {
-              'Content-Type': 'application/json'
-          };
-          
-          // 如果有认证令牌，添加认证头
-          if (authToken) {
-              headers['x-auth-password'] = authToken;
+      // 未登录（游客）：配置仅保存在本地（localStorage），刷新后仍可恢复，不弹提示
+      if (!authToken) {
+          try {
+              safeSetItem(SEARCH_CONFIG_KEY, JSON.stringify(searchConfig));
+          } catch (e) {
+              console.warn('Failed to save search config locally.', e);
           }
-          
+          return;
+      }
+      
+      // 已登录：保存到KV空间
+      try {
           const response = await fetch('/api/storage', {
               method: 'POST',
-              headers: headers,
+              headers: {
+                  'Content-Type': 'application/json',
+                  'x-auth-password': authToken
+              },
               body: JSON.stringify({
                   saveConfig: 'search',
                   config: searchConfig
@@ -1850,15 +1899,7 @@ function App() {
           
           if (!response.ok) {
               console.error('Failed to save search config to KV:', response.statusText);
-              // 未登录时搜索配置只在本地生效（服务端返回 401），首次明确告知用户
-              if (response.status === 401 && !authToken) {
-                  if (!searchPersistNoticeShown.current) {
-                      searchPersistNoticeShown.current = true;
-                      alert('当前未登录：搜索配置仅在本地生效，登录后才会保存到云端。');
-                  }
-              } else {
-                  updateSyncStatus('error');
-              }
+              updateSyncStatus('error');
           }
       } catch (error) {
           console.error('Error saving search config to KV:', error);
@@ -2654,6 +2695,7 @@ function App() {
         {/* Footer Actions */}
         <div className={`p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 shrink-0 ${isSidebarCollapsed ? 'lg:px-2' : ''}`}>
             
+            {authToken && (
             <div className={`grid grid-cols-4 gap-2 mb-2 ${isSidebarCollapsed ? 'lg:grid-cols-1' : ''}`}>
                 <button 
                     onClick={() => { if(!authToken) setIsAuthOpen(true); else setIsImportModalOpen(true); }}
@@ -2707,6 +2749,7 @@ function App() {
                     <span className={isSidebarCollapsed ? 'lg:hidden' : ''}>检测</span>
                 </button>
             </div>
+            )}
             
             <div className={`flex items-center justify-between text-xs px-2 mt-2 ${isSidebarCollapsed ? 'lg:flex-col lg:items-center lg:gap-1.5' : ''}`}>
                <div className="flex items-center gap-1 text-slate-400">
@@ -2790,7 +2833,7 @@ function App() {
                 </div>
                 
                 {/* 搜索配置管理按钮 */}
-                {searchMode === 'external' && (
+                {searchMode === 'external' && authToken && (
                   <button
                     onClick={() => setIsSearchConfigModalOpen(true)}
                     onPointerEnter={loadSearchConfigModal}
