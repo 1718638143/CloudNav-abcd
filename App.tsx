@@ -57,14 +57,54 @@ const LOCAL_STORAGE_KEY = 'cloudnav_data_cache';
 const AUTH_KEY = 'cloudnav_auth_token';
 const AI_CONFIG_KEY = 'cloudnav_ai_config';
 // 游客（未登录）的搜索配置本地持久化键：登录后合并到云端并清除
+const SEARCH_CONFIG_KEY = 'cloudnav_search_config';
 
 // 安全提取 URL 域名：非法 URL 返回空串，避免渲染期 new URL() 抛异常导致整页白屏
 const safeHost = (url: string | undefined | null): string => {
   try { return new URL(url || '').hostname; } catch { return ''; }
 };
 
+// 带超时的 fetch：网络挂起时最多等 30 秒。保存链路是串行队列，
+// 一个请求永久挂起会堵住后续所有保存（“保存中”状态卡死），必须有超时兑底
+const FETCH_TIMEOUT_MS = 30_000;
+const fetchT = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+};
+
 // 主列表分批渲染每批条数
 const PAGE_SIZE = 100;
+
+// 内置默认搜索源（工厂函数：createdAt 取当前时间）
+const makeDefaultSearchSources = (): ExternalSearchSource[] => ([
+  { id: 'bing', name: '必应', url: 'https://www.bing.com/search?q={query}', icon: 'Search', enabled: true, createdAt: Date.now() },
+  { id: 'google', name: 'Google', url: 'https://www.google.com/search?q={query}', icon: 'Search', enabled: true, createdAt: Date.now() },
+  { id: 'baidu', name: '百度', url: 'https://www.baidu.com/s?wd={query}', icon: 'Globe', enabled: true, createdAt: Date.now() },
+  { id: 'sogou', name: '搜狗', url: 'https://www.sogou.com/web?query={query}', icon: 'Globe', enabled: true, createdAt: Date.now() },
+  { id: 'yandex', name: 'Yandex', url: 'https://yandex.com/search/?text={query}', icon: 'Globe', enabled: true, createdAt: Date.now() },
+  { id: 'github', name: 'GitHub', url: 'https://github.com/search?q={query}', icon: 'Github', enabled: true, createdAt: Date.now() },
+  { id: 'linuxdo', name: 'Linux.do', url: 'https://linux.do/search?q={query}', icon: 'Terminal', enabled: true, createdAt: Date.now() },
+  { id: 'bilibili', name: 'B站', url: 'https://search.bilibili.com/all?keyword={query}', icon: 'Play', enabled: true, createdAt: Date.now() },
+  { id: 'youtube', name: 'YouTube', url: 'https://www.youtube.com/results?search_query={query}', icon: 'Video', enabled: true, createdAt: Date.now() },
+  { id: 'wikipedia', name: '维基', url: 'https://zh.wikipedia.org/wiki/Special:Search?search={query}', icon: 'BookOpen', enabled: true, createdAt: Date.now() }
+]);
+
+// 顶栏实时时钟：独立组件自转，每秒 setState 只重渲染本组件，
+// 避免在 App 根组件上每秒 setState 造成整棵组件树（含全部卡片）高频重渲染
+const HeaderClock = () => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="flex items-center gap-1.5 px-1 mr-3" title="当前时间">
+      <Clock size={20} className="text-blue-500 shrink-0" />
+      <span className="text-xl font-bold text-slate-700 dark:text-slate-200 tabular-nums">{now.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+    </div>
+  );
+};
 
 // 判断一份数据是否是服务端脱敏视图（公开视图：加密分类密码被剥、其链接被过滤）。
 // 脱敏数据只可用于展示，绝不能回写 app_data，否则会把加密分类的密码抹掉、丢失受保护链接。
@@ -152,6 +192,8 @@ function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  // 搜索防抖：过滤+拼音匹配是重计算，输入即时回显、200ms 后才触发列表重算
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // 桌面端侧边栏折叠状态（隐藏整个侧边栏，持久化到 localStorage）
@@ -166,7 +208,6 @@ function App() {
   // Search Mode State
   const [searchMode, setSearchMode] = useState<SearchMode>('external');
   const [externalSearchSources, setExternalSearchSources] = useState<ExternalSearchSource[]>([]);
-  const [isLoadingSearchConfig, setIsLoadingSearchConfig] = useState(true);
   
   // Category Security State
   const [unlockedCategoryIds, setUnlockedCategoryIds] = useState<Set<string>>(new Set());
@@ -174,9 +215,8 @@ function App() {
   const dataSanitizedRef = useRef(false);
   // 服务端 app_data 的版本号：用于乐观并发控制（保存时携带 baseRevision，被其他端修改过则 409）
   const dataRevisionRef = useRef<number>(0);
-  const SEARCH_CONFIG_KEY = 'cloudnav_search_config';
 
-// 分批渲染：主列表每批渲染条数，避免上千书签一次性全部渲染导致卡顿
+  // 分批渲染：主列表每批渲染条数，避免上千书签一次性全部渲染导致卡顿
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   // 其他目录搜索结果同样分批渲染，避免全库搜索时一次性渲染上千张卡片
   const [otherResultsVisibleCount, setOtherResultsVisibleCount] = useState(PAGE_SIZE);
@@ -235,8 +275,6 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error' | 'offline'>('idle');
   // 轻量操作反馈（toast）：复制成功等短提示，1.5 秒后自动消失
   const [toast, setToast] = useState('');
-  // 顶栏实时时钟（24 小时制），每秒刷新
-  const [currentTime, setCurrentTime] = useState(() => new Date());
   // 同步状态指示器统一入口：所有状态变更都先清掉挂起的 idle 定时器，
   // 避免上一次保存遗留的定时器把新状态（如 saving/error）提前打回 idle 造成指示器错乱
   const syncStatusTimerRef = useRef<number | null>(null);
@@ -258,11 +296,6 @@ function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // 实时时钟：每秒同步一次，卸载时清理定时器
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
   const [authToken, setAuthToken] = useState<string>('');
   useEffect(() => { authTokenRef.current = authToken; }, [authToken]);
   const [requiresAuth, setRequiresAuth] = useState<boolean | null>(null); // null表示未检查，true表示需要认证，false表示不需要认证
@@ -425,7 +458,7 @@ function App() {
     }
     updateSyncStatus('saving');
     try {
-        const response = await fetch('/api/storage', {
+        const response = await fetchT('/api/storage', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -444,7 +477,7 @@ function App() {
             } catch { /* 响应体解析失败则不采用 */ }
             let refreshed = false;
             try {
-                const fresh = await fetch('/api/storage', { headers: { 'x-auth-password': token } });
+                const fresh = await fetchT('/api/storage', { headers: { 'x-auth-password': token } });
                 if (fresh.ok) {
                     const data = await fresh.json();
                     if (Array.isArray(data?.links) && Array.isArray(data?.categories)) {
@@ -644,9 +677,10 @@ function App() {
     const domainsToFetch: string[] = [];
     const seenDomains = new Set<string>();
     
-    // 收集所有链接的域名（包括已有图标的链接，同域名去重）
+    // 只收集缺图标（或图标仍是 gstatic 外链占位）的链接域名，同域名去重：
+    // 已有 base64 图标的链接不再发 favicon 查询，启动时的请求量从“域名数”降到接近零
     for (const link of linksToLoad) {
-      if (link.url) {
+      if (link.url && (!link.icon || link.icon.includes('gstatic.cn'))) {
         try {
           let domain = link.url;
           if (!link.url.startsWith('http://') && !link.url.startsWith('https://')) {
@@ -825,7 +859,7 @@ function App() {
         // 获取数据
         let hasCloudData = false;
         try {
-            const res = await fetch('/api/storage', {
+            const res = await fetchT('/api/storage', {
                 // 用闭包内的 savedToken 而非 state authToken（setAuthToken 后 state 尚未更新，会带不上密码头导致 401）
                 headers: savedToken ? { 'x-auth-password': savedToken } : {}
             });
@@ -834,17 +868,20 @@ function App() {
                 // 记录数据来源：脱敏视图（未登录公开数据）不可回写云端
                 dataSanitizedRef.current = isSanitizedData(data);
                 dataRevisionRef.current = Number(data.revision) || 0;
-                if (data.links && data.links.length > 0) {
+                // links 或 categories 任一非空即视为有云端数据（与登录路径一致）：
+                // 仅看 links 会把“云端只建了分类、还没有书签”的状态误判为空，进而用本地默认数据覆盖
+                if ((data.links && data.links.length > 0) || (data.categories && data.categories.length > 0)) {
+                    const loadedLinks = data.links ?? [];
                     const loadedCategories = data.categories?.length
                       ? data.categories
                       : (dataRef.current.categories.length ? dataRef.current.categories : DEFAULT_CATEGORIES);
-                    dataRef.current = { links: data.links, categories: loadedCategories };
-                    setLinks(data.links);
+                    dataRef.current = { links: loadedLinks, categories: loadedCategories };
+                    setLinks(loadedLinks);
                     setCategories(loadedCategories);
-                    writeLocalCache(data.links, loadedCategories);
+                    writeLocalCache(loadedLinks, loadedCategories);
                     
                     // 加载链接图标缓存（传入 savedToken：此时 authToken state 尚未更新）
-                    loadLinkIcons(data.links, savedToken);
+                    loadLinkIcons(loadedLinks, savedToken);
                     hasCloudData = true;
                 }
             } else if (res.status === 401) {
@@ -918,7 +955,6 @@ function App() {
         
         // 如果有云端数据，则不需要加载本地数据
         if (hasCloudData) {
-            setIsLoadingSearchConfig(false);
             return;
         }
         
@@ -927,96 +963,13 @@ function App() {
 
         // KV 已有搜索配置时绝不能再用内置列表覆盖
         if (searchConfigLoaded) {
-            setIsLoadingSearchConfig(false);
             return;
         }
         
         // 只有 KV 没有搜索配置时才写入内置默认源
         setSearchMode('external');
-        setExternalSearchSources([
-            {
-                id: 'bing',
-                name: '必应',
-                url: 'https://www.bing.com/search?q={query}',
-                icon: 'Search',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'google',
-                name: 'Google',
-                url: 'https://www.google.com/search?q={query}',
-                icon: 'Search',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'baidu',
-                name: '百度',
-                url: 'https://www.baidu.com/s?wd={query}',
-                icon: 'Globe',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'sogou',
-                name: '搜狗',
-                url: 'https://www.sogou.com/web?query={query}',
-                icon: 'Globe',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'yandex',
-                name: 'Yandex',
-                url: 'https://yandex.com/search/?text={query}',
-                icon: 'Globe',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'github',
-                name: 'GitHub',
-                url: 'https://github.com/search?q={query}',
-                icon: 'Github',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'linuxdo',
-                name: 'Linux.do',
-                url: 'https://linux.do/search?q={query}',
-                icon: 'Terminal',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'bilibili',
-                name: 'B站',
-                url: 'https://search.bilibili.com/all?keyword={query}',
-                icon: 'Play',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'youtube',
-                name: 'YouTube',
-                url: 'https://www.youtube.com/results?search_query={query}',
-                icon: 'Video',
-                enabled: true,
-                createdAt: Date.now()
-            },
-            {
-                id: 'wikipedia',
-                name: '维基',
-                url: 'https://zh.wikipedia.org/wiki/Special:Search?search={query}',
-                icon: 'BookOpen',
-                enabled: true,
-                createdAt: Date.now()
-            }
-        ]);
+        setExternalSearchSources(makeDefaultSearchSources());
         
-        setIsLoadingSearchConfig(false);
     };
 
     initData();
@@ -1201,26 +1154,29 @@ function App() {
                 console.warn('Failed to merge local search config to cloud.', e);
             }
             
-            // 登录成功后，获取网站配置（包括密码过期时间设置）
-            try {
-                const websiteConfigRes = await fetch('/api/storage?getConfig=website');
-                if (websiteConfigRes.ok) {
-                    const websiteConfigData = await websiteConfigRes.json();
-                    if (websiteConfigData) {
-                        setSiteSettings(prev => ({
-                            ...prev,
-                            title: websiteConfigData.title || prev.title,
-                            navTitle: websiteConfigData.navTitle || prev.navTitle,
-                            favicon: websiteConfigData.favicon || prev.favicon,
-                            cardStyle: websiteConfigData.cardStyle || prev.cardStyle,
-                            passwordExpiryDays: websiteConfigData.passwordExpiryDays !== undefined ? websiteConfigData.passwordExpiryDays : prev.passwordExpiryDays,
-                            requireLoginAccess: websiteConfigData.requireLoginAccess !== undefined ? websiteConfigData.requireLoginAccess : prev.requireLoginAccess,
-                            wallpaper: websiteConfigData.wallpaper !== undefined ? websiteConfigData.wallpaper : prev.wallpaper
-                        }));
-                    }
-                }
-            } catch (e) {
-                console.warn("Failed to fetch website config after login.", e);
+            // 网站配置与 AI 配置与数据请求并行发起：登录等待时间≈单个请求而不是三者串行之和
+            const websiteCfgPromise = fetch('/api/storage?getConfig=website')
+                .then(r => (r.ok ? r.json() : null))
+                .catch(() => null);
+            const aiCfgPromise = fetch('/api/storage?getConfig=ai', {
+                headers: { 'x-auth-password': sessionToken }
+            })
+                .then(r => (r.ok ? r.json() : null))
+                .catch(() => null);
+            
+            // 应用网站配置
+            const websiteConfigData = await websiteCfgPromise;
+            if (websiteConfigData) {
+                setSiteSettings(prev => ({
+                    ...prev,
+                    title: websiteConfigData.title || prev.title,
+                    navTitle: websiteConfigData.navTitle || prev.navTitle,
+                    favicon: websiteConfigData.favicon || prev.favicon,
+                    cardStyle: websiteConfigData.cardStyle || prev.cardStyle,
+                    passwordExpiryDays: websiteConfigData.passwordExpiryDays !== undefined ? websiteConfigData.passwordExpiryDays : prev.passwordExpiryDays,
+                    requireLoginAccess: websiteConfigData.requireLoginAccess !== undefined ? websiteConfigData.requireLoginAccess : prev.requireLoginAccess,
+                    wallpaper: websiteConfigData.wallpaper !== undefined ? websiteConfigData.wallpaper : prev.wallpaper
+                }));
             }
             
             // 刚刚密码验证成功，直接刷新本地登录时间；过期控制由服务端 verifyAccess 负责
@@ -1228,7 +1184,7 @@ function App() {
             
             // 登录成功后，从服务器获取数据
             try {
-                const res = await fetch('/api/storage', {
+                const res = await fetchT('/api/storage', {
                     headers: { 'x-auth-password': sessionToken }
                 });
                 if (res.ok) {
@@ -1276,20 +1232,11 @@ function App() {
                 syncToCloud(dataRef.current.links, dataRef.current.categories, sessionToken);
             }
             
-            // 登录成功后，从KV空间加载AI配置
-            try {
-                const aiConfigRes = await fetch('/api/storage?getConfig=ai', {
-                    headers: { 'x-auth-password': sessionToken }
-                });
-                if (aiConfigRes.ok) {
-                    const aiConfigData = await aiConfigRes.json();
-                    if (aiConfigData && Object.keys(aiConfigData).length > 0) {
-                        setAiConfig(aiConfigData);
-                        safeSetItem(AI_CONFIG_KEY, JSON.stringify(aiConfigData));
-                    }
-                }
-            } catch (e) {
-                console.warn("Failed to fetch AI config after login.", e);
+            // 从KV空间加载AI配置（请求已在前面并行发出）
+            const aiConfigData = await aiCfgPromise;
+            if (aiConfigData && Object.keys(aiConfigData).length > 0) {
+                setAiConfig(aiConfigData);
+                safeSetItem(AI_CONFIG_KEY, JSON.stringify(aiConfigData));
             }
             
             return true;
@@ -1912,88 +1859,7 @@ function App() {
       
       // 如果切换到外部搜索模式且搜索源列表为空，自动加载默认搜索源
       if (mode === 'external' && externalSearchSources.length === 0) {
-          const defaultSources: ExternalSearchSource[] = [
-              {
-                  id: 'bing',
-                  name: '必应',
-                  url: 'https://www.bing.com/search?q={query}',
-                  icon: 'Search',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'google',
-                  name: 'Google',
-                  url: 'https://www.google.com/search?q={query}',
-                  icon: 'Search',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'baidu',
-                  name: '百度',
-                  url: 'https://www.baidu.com/s?wd={query}',
-                  icon: 'Globe',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'sogou',
-                  name: '搜狗',
-                  url: 'https://www.sogou.com/web?query={query}',
-                  icon: 'Globe',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'yandex',
-                  name: 'Yandex',
-                  url: 'https://yandex.com/search/?text={query}',
-                  icon: 'Globe',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'github',
-                  name: 'GitHub',
-                  url: 'https://github.com/search?q={query}',
-                  icon: 'Github',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'linuxdo',
-                  name: 'Linux.do',
-                  url: 'https://linux.do/search?q={query}',
-                  icon: 'Terminal',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'bilibili',
-                  name: 'B站',
-                  url: 'https://search.bilibili.com/all?keyword={query}',
-                  icon: 'Play',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'youtube',
-                  name: 'YouTube',
-                  url: 'https://www.youtube.com/results?search_query={query}',
-                  icon: 'Video',
-                  enabled: true,
-                  createdAt: Date.now()
-              },
-              {
-                  id: 'wikipedia',
-                  name: '维基',
-                  url: 'https://zh.wikipedia.org/wiki/Special:Search?search={query}',
-                  icon: 'BookOpen',
-                  enabled: true,
-                  createdAt: Date.now()
-              }
-          ];
+          const defaultSources = makeDefaultSearchSources();
           
           // 保存默认搜索源到状态和KV空间
           handleSaveSearchConfig(defaultSources, mode);
@@ -2006,88 +1872,7 @@ function App() {
       if (searchQuery.trim() && searchMode === 'external') {
           // 如果搜索源列表为空，自动加载默认搜索源
           if (externalSearchSources.length === 0) {
-              const defaultSources: ExternalSearchSource[] = [
-                  {
-                      id: 'bing',
-                      name: '必应',
-                      url: 'https://www.bing.com/search?q={query}',
-                      icon: 'Search',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'google',
-                      name: 'Google',
-                      url: 'https://www.google.com/search?q={query}',
-                      icon: 'Search',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'baidu',
-                      name: '百度',
-                      url: 'https://www.baidu.com/s?wd={query}',
-                      icon: 'Globe',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'sogou',
-                      name: '搜狗',
-                      url: 'https://www.sogou.com/web?query={query}',
-                      icon: 'Globe',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'yandex',
-                      name: 'Yandex',
-                      url: 'https://yandex.com/search/?text={query}',
-                      icon: 'Globe',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'github',
-                      name: 'GitHub',
-                      url: 'https://github.com/search?q={query}',
-                      icon: 'Github',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'linuxdo',
-                      name: 'Linux.do',
-                      url: 'https://linux.do/search?q={query}',
-                      icon: 'Terminal',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'bilibili',
-                      name: 'B站',
-                      url: 'https://search.bilibili.com/all?keyword={query}',
-                      icon: 'Play',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'youtube',
-                      name: 'YouTube',
-                      url: 'https://www.youtube.com/results?search_query={query}',
-                      icon: 'Video',
-                      enabled: true,
-                      createdAt: Date.now()
-                  },
-                  {
-                      id: 'wikipedia',
-                      name: '维基',
-                      url: 'https://zh.wikipedia.org/wiki/Special:Search?search={query}',
-                      icon: 'BookOpen',
-                      enabled: true,
-                      createdAt: Date.now()
-                  }
-              ];
+              const defaultSources = makeDefaultSearchSources();
               
               // 保存默认搜索源到状态和KV空间
               handleSaveSearchConfig(defaultSources, 'external');
@@ -2141,21 +1926,33 @@ function App() {
 
   // --- Filtering & Memo ---
 
+  // 预计算锁定的分类ID集合（含父分类锁定向子分类的继承）：
+  // 列表过滤从“每个链接递归 find 分类”的 O(链接数×分类数) 降为 O(1) 查询
+  const lockedCategoryIds = useMemo(() => {
+      const byId = new Map(categories.map(c => [c.id, c] as const));
+      const status = new Map<string, boolean>();
+      const visiting = new Set<string>();
+      const isLocked = (id: string): boolean => {
+          if (status.has(id)) return status.get(id)!;
+          if (visiting.has(id)) return false; // 防御：脏数据环形引用时按未锁定处理，避免栈溢出
+          visiting.add(id);
+          const c = byId.get(id);
+          let locked = false;
+          if (c) {
+              const selfLocked = !!c.password && !unlockedCategoryIds.has(id);
+              locked = selfLocked || (c.parentId ? isLocked(c.parentId) : false);
+          }
+          visiting.delete(id);
+          status.set(id, locked);
+          return locked;
+      };
+      const result = new Set<string>();
+      categories.forEach(c => { if (isLocked(c.id)) result.add(c.id); });
+      return result;
+  }, [categories, unlockedCategoryIds]);
+
   // Helper to check if a category is "Locked" (Has password AND not unlocked, or its parent is locked)
-  const isCategoryLocked = (catId: string): boolean => {
-      const cat = categories.find(c => c.id === catId);
-      if (!cat) return false;
-      
-      // 检查当前分类是否锁定
-      if (cat.password && !unlockedCategoryIds.has(catId)) return true;
-      
-      // 如果有父分类，递归检查父分类是否锁定
-      if (cat.parentId) {
-          return isCategoryLocked(cat.parentId);
-      }
-      
-      return false;
-  };
+  const isCategoryLocked = (catId: string): boolean => lockedCategoryIds.has(catId);
 
   const pinnedLinks = useMemo(() => {
       // Don't show pinned links if they belong to a locked category
@@ -2188,11 +1985,17 @@ function App() {
     );
   }, [categories]);
 
+  // 搜索防抖：输入停止 200ms 后才用新关键词触发列表重算
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchQuery(searchQuery), 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
   // 分类或搜索条件变化时重置分批渲染计数
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
     setOtherResultsVisibleCount(PAGE_SIZE);
-  }, [selectedCategory, searchQuery]);
+  }, [selectedCategory, debouncedSearchQuery]);
 
   const displayedLinks = useMemo(() => {
     let result = links;
@@ -2200,9 +2003,9 @@ function App() {
     // Security Filter: Always hide links from locked categories
     result = result.filter(l => !isCategoryLocked(l.categoryId));
 
-    // Search Filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+    // Search Filter（使用防抖后的关键词，输入过程中不重算）
+    if (debouncedSearchQuery.trim()) {
+      const q = debouncedSearchQuery.toLowerCase();
       result = result.filter(l => isLinkMatchSearch(l, q));
     }
 
@@ -2222,15 +2025,15 @@ function App() {
       // 改为升序排序，这样order值小(旧卡片)的排在前面，order值大(新卡片)的排在后面
       return aOrder - bOrder;
     });
-  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds, isLinkMatchSearch]);
+  }, [links, selectedCategory, debouncedSearchQuery, categories, unlockedCategoryIds, isLinkMatchSearch]);
 
   // 计算其他目录的搜索结果
   const otherCategoryResults = useMemo<Record<string, LinkItem[]>>(() => {
-    if (!searchQuery.trim() || selectedCategory === 'all') {
+    if (!debouncedSearchQuery.trim() || selectedCategory === 'all') {
       return {};
     }
 
-    const q = searchQuery.toLowerCase();
+    const q = debouncedSearchQuery.toLowerCase();
     
     // 获取其他目录中匹配的链接
     // 当前分类及其子分类已经在主列表里，不能再出现在“其他目录”
@@ -2271,7 +2074,7 @@ function App() {
     });
 
     return groupedByCategory;
-  }, [links, selectedCategory, searchQuery, categories, unlockedCategoryIds, isLinkMatchSearch]);
+  }, [links, selectedCategory, debouncedSearchQuery, categories, unlockedCategoryIds, isLinkMatchSearch]);
 
 
   // --- Render Components ---
@@ -2981,12 +2784,8 @@ key={source.id}
 
           <div className="flex items-center gap-2">
             {/* 实时时钟（24 小时制）：与右侧视图切换保持适当间距 */}
-            <div
-              className={`${isMobileSearchOpen ? 'hidden' : 'flex'} lg:flex items-center gap-1.5 px-1 mr-3`}
-              title="当前时间"
-            >
-              <Clock size={20} className="text-blue-500 shrink-0" />
-              <span className="text-xl font-bold text-slate-700 dark:text-slate-200 tabular-nums">{currentTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+            <div className={`${isMobileSearchOpen ? 'hidden' : 'flex'} lg:flex`}>
+              <HeaderClock />
             </div>
             {/* 视图切换控制器 - 移动端：搜索框展开时隐藏，桌面端始终显示 */}
             <div className={`${isMobileSearchOpen ? 'hidden' : 'flex'} lg:flex items-center bg-slate-100 dark:bg-slate-700 rounded-full p-1`}>
@@ -3049,7 +2848,7 @@ key={source.id}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-8 space-y-8 relative z-10">
             
             {/* 1. Pinned Area (Custom Top Area) */}
-            {pinnedLinks.length > 0 && !searchQuery && (selectedCategory === 'all') && (
+            {pinnedLinks.length > 0 && !debouncedSearchQuery && (selectedCategory === 'all') && (
                 <section>
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -3125,13 +2924,13 @@ key={source.id}
             )}
 
             {/* 2. Main Grid */}
-            {(selectedCategory !== 'all' || searchQuery) && (
+            {(selectedCategory !== 'all' || debouncedSearchQuery) && (
             <section>
                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                      <div className="flex items-center flex-wrap gap-y-2">
                          <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mr-4">
                              {selectedCategory === 'all' 
-                                ? (searchQuery ? '搜索结果' : '所有链接') 
+                                ? (debouncedSearchQuery ? '搜索结果' : '所有链接') 
                                 : (() => {
                                     const currentCat = categories.find(c => c.id === selectedCategory);
                                     const primaryCat = currentCat?.parentId 
@@ -3390,7 +3189,7 @@ key={source.id}
             )}
 
             {/* 其他目录搜索结果区域 */}
-            {searchQuery.trim() && selectedCategory !== 'all' && (
+            {debouncedSearchQuery.trim() && selectedCategory !== 'all' && (
               <section className="mt-8 pt-8 border-t-2 border-slate-200 dark:border-slate-700">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2 mb-4">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-folder-search">
